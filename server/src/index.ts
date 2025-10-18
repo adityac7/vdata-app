@@ -111,7 +111,8 @@ const resources: Resource[] = [
     mimeType: "text/html+skybridge",
     _meta: widgetMeta({
       "openai/widgetCSP": {
-        connect_domains: DATABASE_URL ? [new URL(DATABASE_URL).hostname] : [],
+        // connect_domains requires full URLs, not just hostnames
+        connect_domains: DATABASE_URL ? [`https://${new URL(DATABASE_URL).hostname}`] : [],
         resource_domains: []
       }
     })
@@ -145,6 +146,31 @@ const getColumnValueCountsSchema = z.object({
 
 // Define tools - following OpenAI Apps SDK pattern
 const tools: Tool[] = [
+  // Compatibility alias for old tool name
+  {
+    name: "show_vdata_app",
+    description: "Display the Vdata App interface with a welcome message (alias for initialize_dashboard)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        message: {
+          type: "string",
+          description: "Optional welcome message"
+        }
+      },
+      additionalProperties: false
+    },
+    title: "Show Vdata App",
+    _meta: widgetMeta({
+      "openai/toolInvocation/invoking": "Loading Vdata App...",
+      "openai/toolInvocation/invoked": "Vdata App loaded",
+    }),
+    annotations: {
+      destructiveHint: false,
+      openWorldHint: false,
+      readOnlyHint: true
+    }
+  },
   {
     name: "initialize_dashboard",
     description: "Initialize the analytics dashboard and show database connection status",
@@ -507,7 +533,8 @@ function createVdataServer(): Server {
             text: WIDGET_HTML,
             _meta: widgetMeta({
               "openai/widgetCSP": {
-                connect_domains: DATABASE_URL ? [new URL(DATABASE_URL).hostname] : [],
+                // connect_domains requires full URLs, not just hostnames
+                connect_domains: DATABASE_URL ? [`https://${new URL(DATABASE_URL).hostname}`] : [],
                 resource_domains: []
               }
             })
@@ -533,6 +560,8 @@ function createVdataServer(): Server {
 
       try {
         switch (name) {
+          // Compatibility alias
+          case "show_vdata_app":
           case "initialize_dashboard": {
             const args = initializeDashboardSchema.parse(request.params.arguments ?? {});
             const result = await initializeDashboard(args.message);
