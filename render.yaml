@@ -10,4 +10,6 @@ services:
         value: production
       - key: PORT
         value: 10000
+      - key: DATABASE_URL
+        sync: false  # Set this manually in Render dashboard to your PostgreSQL connection string
 
