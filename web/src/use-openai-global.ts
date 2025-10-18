@@ -1,38 +1,46 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
-import type { OpenAiGlobal } from "./types";
+import { useSyncExternalStore } from "react";
+import {
+  SET_GLOBALS_EVENT_TYPE,
+  SetGlobalsEvent,
+  type OpenAiGlobals,
+} from "./types";
 
 /**
  * Hook to access a property from window.openai and subscribe to changes
- * Based on OpenAI Apps SDK examples
+ * Based on official OpenAI Apps SDK examples - uses event listener pattern
  *
  * @example
  * const displayMode = useOpenAiGlobal("displayMode");
  * const theme = useOpenAiGlobal("theme");
+ * const toolOutput = useOpenAiGlobal("toolOutput");
  */
-export function useOpenAiGlobal<K extends keyof OpenAiGlobal>(
+export function useOpenAiGlobal<K extends keyof OpenAiGlobals>(
   key: K
-): OpenAiGlobal[K] | undefined {
-  const [isClient, setIsClient] = useState(false);
-
-  useEffect(() => {
-    setIsClient(typeof window !== "undefined");
-  }, []);
-
-  const value = useSyncExternalStore(
-    (callback) => {
-      if (!isClient || !window.openai?.subscribe) {
+): OpenAiGlobals[K] | null {
+  return useSyncExternalStore(
+    (onChange) => {
+      if (typeof window === "undefined") {
         return () => {};
       }
-      return window.openai.subscribe(callback);
-    },
-    () => {
-      if (!isClient || !window.openai) {
-        return undefined;
-      }
-      return window.openai[key];
-    },
-    () => undefined
-  );
 
-  return value;
+      const handleSetGlobal = (event: SetGlobalsEvent) => {
+        const value = event.detail.globals[key];
+        if (value === undefined) {
+          return;
+        }
+
+        onChange();
+      };
+
+      window.addEventListener(SET_GLOBALS_EVENT_TYPE, handleSetGlobal, {
+        passive: true,
+      });
+
+      return () => {
+        window.removeEventListener(SET_GLOBALS_EVENT_TYPE, handleSetGlobal);
+      };
+    },
+    () => window.openai?.[key] ?? null,
+    () => window.openai?.[key] ?? null
+  );
 }

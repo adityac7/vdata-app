@@ -4,7 +4,6 @@ import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { URL } from "url";
-import { Pool, type QueryResult } from "pg";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import {
@@ -20,6 +19,14 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import {
+  executeQuery,
+  getDatabaseSchema,
+  getSampleData,
+  getDatabaseStatistics,
+  getColumnValueCounts,
+  closePool
+} from "./database.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -28,25 +35,11 @@ const __dirname = dirname(__filename);
 const PORT = parseInt(process.env.PORT || "8000", 10);
 const DATABASE_URL = process.env.DATABASE_URL;
 
-// PostgreSQL connection pool
-let pool: Pool | null = null;
+// Check if database is configured
+const isDatabaseConfigured = !!DATABASE_URL;
 
-if (DATABASE_URL) {
-  pool = new Pool({
-    connectionString: DATABASE_URL,
-    ssl: DATABASE_URL.includes('localhost') ? false : {
-      rejectUnauthorized: false // Required for Render PostgreSQL
-    },
-    max: 10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 10000,
-  });
-
-  pool.on('error', (err) => {
-    console.error('Unexpected PostgreSQL pool error:', err);
-  });
-
-  console.log('✅ PostgreSQL pool initialized');
+if (isDatabaseConfigured) {
+  console.log('✅ DATABASE_URL configured');
 } else {
   console.warn('⚠️  DATABASE_URL not set - database tools will not work');
 }
@@ -128,75 +121,33 @@ const resources: Resource[] = [
 // Tool input schemas
 const runQuerySchema = z.object({
   query: z.string().describe("SQL SELECT query to execute"),
-  limit: z.number().optional().describe("Optional limit for results (default: 100)")
+  limit: z.number().optional().describe("Optional limit for results (default: 1000)")
 });
 
 const getSchemaSchema = z.object({
-  tableName: z.string().optional().describe("Optional table name to get schema for specific table")
+  tableName: z.string().optional().describe("Optional: specific table name. Leave empty to list all tables")
 });
 
-const executeAnalyticsSchema = z.object({
-  question: z.string().describe("Natural language question about the data")
+const initializeDashboardSchema = z.object({
+  message: z.string().optional().describe("Optional welcome message")
+});
+
+const getSampleDataSchema = z.object({
+  limit: z.number().optional().describe("Number of sample rows to return (default: 10, max: 100)")
+});
+
+const getDatabaseStatisticsSchema = z.object({});
+
+const getColumnValueCountsSchema = z.object({
+  columnName: z.string().describe("Column name to analyze. Valid columns: type, cat, genre, age_bucket, gender, nccs_class, state_grp, day_of_week, population, app_name"),
+  limit: z.number().optional().describe("Number of top values to return (default: 20, max: 100)")
 });
 
 // Define tools - following OpenAI Apps SDK pattern
 const tools: Tool[] = [
   {
-    name: "run_query",
-    description: "Execute a SELECT query on the PostgreSQL database and display results in the analytics dashboard",
-    inputSchema: {
-      type: "object",
-      properties: {
-        query: {
-          type: "string",
-          description: "SQL SELECT query to execute"
-        },
-        limit: {
-          type: "number",
-          description: "Optional limit for results (default: 100)"
-        }
-      },
-      required: ["query"],
-      additionalProperties: false
-    },
-    title: "Run SQL Query",
-    _meta: widgetMeta({
-      "openai/toolInvocation/invoking": "Executing query...",
-      "openai/toolInvocation/invoked": "Query executed",
-    }),
-    annotations: {
-      destructiveHint: false,
-      openWorldHint: false,
-      readOnlyHint: true
-    }
-  },
-  {
-    name: "get_schema",
-    description: "Get database schema information - list all tables or details for a specific table",
-    inputSchema: {
-      type: "object",
-      properties: {
-        tableName: {
-          type: "string",
-          description: "Optional table name to get schema for specific table"
-        }
-      },
-      additionalProperties: false
-    },
-    title: "Get Database Schema",
-    _meta: widgetMeta({
-      "openai/toolInvocation/invoking": "Fetching schema...",
-      "openai/toolInvocation/invoked": "Schema retrieved",
-    }),
-    annotations: {
-      destructiveHint: false,
-      openWorldHint: false,
-      readOnlyHint: true
-    }
-  },
-  {
     name: "initialize_dashboard",
-    description: "Initialize the analytics dashboard and show database status",
+    description: "Initialize the analytics dashboard and show database connection status",
     inputSchema: {
       type: "object",
       properties: {
@@ -217,117 +168,198 @@ const tools: Tool[] = [
       openWorldHint: false,
       readOnlyHint: true
     }
+  },
+  {
+    name: "run_query",
+    description: "Execute a SELECT query on the PostgreSQL database (digital_insights table) and display results in the analytics dashboard. Automatically adds LIMIT if not specified.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "SQL SELECT query to execute"
+        },
+        limit: {
+          type: "number",
+          description: "Optional limit for results (default: 1000)"
+        }
+      },
+      required: ["query"],
+      additionalProperties: false
+    },
+    title: "Run SQL Query",
+    _meta: widgetMeta({
+      "openai/toolInvocation/invoking": "Executing query...",
+      "openai/toolInvocation/invoked": "Query executed",
+    }),
+    annotations: {
+      destructiveHint: false,
+      openWorldHint: false,
+      readOnlyHint: true
+    }
+  },
+  {
+    name: "get_schema",
+    description: "Get database schema information. If tableName is provided, returns column details for that table. Otherwise, lists all tables in the database.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tableName: {
+          type: "string",
+          description: "Optional: specific table name (e.g., 'digital_insights'). Leave empty to list all tables"
+        }
+      },
+      additionalProperties: false
+    },
+    title: "Get Database Schema",
+    _meta: widgetMeta({
+      "openai/toolInvocation/invoking": "Fetching schema...",
+      "openai/toolInvocation/invoked": "Schema retrieved",
+    }),
+    annotations: {
+      destructiveHint: false,
+      openWorldHint: false,
+      readOnlyHint: true
+    }
+  },
+  {
+    name: "get_sample_data",
+    description: "Get a sample of rows from the digital_insights table to preview the data structure and content",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: {
+          type: "number",
+          description: "Number of sample rows (default: 10, max: 100)"
+        }
+      },
+      additionalProperties: false
+    },
+    title: "Get Sample Data",
+    _meta: widgetMeta({
+      "openai/toolInvocation/invoking": "Fetching sample data...",
+      "openai/toolInvocation/invoked": "Sample data retrieved",
+    }),
+    annotations: {
+      destructiveHint: false,
+      openWorldHint: false,
+      readOnlyHint: true
+    }
+  },
+  {
+    name: "get_database_statistics",
+    description: "Get statistics about the digital_insights table including total row count and platform distribution (type, count, avg duration, percentage)",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false
+    },
+    title: "Get Database Statistics",
+    _meta: widgetMeta({
+      "openai/toolInvocation/invoking": "Calculating statistics...",
+      "openai/toolInvocation/invoked": "Statistics retrieved",
+    }),
+    annotations: {
+      destructiveHint: false,
+      openWorldHint: false,
+      readOnlyHint: true
+    }
+  },
+  {
+    name: "get_column_value_counts",
+    description: "Get value distribution for a specific column in the digital_insights table. Shows count and percentage for each unique value.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        columnName: {
+          type: "string",
+          description: "Column name to analyze. Valid: type, cat, genre, age_bucket, gender, nccs_class, state_grp, day_of_week, population, app_name"
+        },
+        limit: {
+          type: "number",
+          description: "Number of top values to return (default: 20, max: 100)"
+        }
+      },
+      required: ["columnName"],
+      additionalProperties: false
+    },
+    title: "Get Column Value Counts",
+    _meta: widgetMeta({
+      "openai/toolInvocation/invoking": "Analyzing column...",
+      "openai/toolInvocation/invoked": "Analysis complete",
+    }),
+    annotations: {
+      destructiveHint: false,
+      openWorldHint: false,
+      readOnlyHint: true
+    }
   }
 ];
 
-// Database helper functions
-async function executeQuery(query: string, limit?: number): Promise<any> {
-  if (!pool) {
-    throw new Error("Database connection not configured. Set DATABASE_URL environment variable.");
-  }
+// Helper to format database.ts results for dashboard
+function formatDatabaseResult(dbResult: any, query?: string): any {
+  if (typeof dbResult === 'string') {
+    // Parse JSON string response from database.ts functions
+    try {
+      const parsed = JSON.parse(dbResult);
 
-  const startTime = Date.now();
-
-  // Add LIMIT if not present and limit is specified
-  let finalQuery = query.trim();
-  if (limit && !finalQuery.toLowerCase().includes('limit')) {
-    finalQuery += ` LIMIT ${limit}`;
-  }
-
-  try {
-    const result: QueryResult = await pool.query(finalQuery);
-    const executionTime = Date.now() - startTime;
-
-    const columns = result.fields.map(field => field.name);
-    const results = result.rows;
-
-    return {
-      query: finalQuery,
-      results,
-      columns,
-      rowCount: result.rowCount,
-      status: 'success',
-      executionTime,
-      message: `Query executed successfully. ${result.rowCount} rows returned.`
-    };
-  } catch (error: any) {
-    const executionTime = Date.now() - startTime;
-    return {
-      query: finalQuery,
-      results: [],
-      columns: [],
-      rowCount: 0,
-      status: 'error',
-      executionTime,
-      error: error.message,
-      message: `Query failed: ${error.message}`
-    };
-  }
-}
-
-async function getSchema(tableName?: string): Promise<any> {
-  if (!pool) {
-    throw new Error("Database connection not configured. Set DATABASE_URL environment variable.");
-  }
-
-  try {
-    if (tableName) {
-      // Get columns for specific table
-      const result = await pool.query(`
-        SELECT
-          column_name,
-          data_type,
-          is_nullable,
-          column_default
-        FROM information_schema.columns
-        WHERE table_name = $1
-        ORDER BY ordinal_position
-      `, [tableName]);
-
+      // Convert to dashboard format
       return {
-        query: `DESCRIBE TABLE ${tableName}`,
-        results: result.rows,
-        columns: ['column_name', 'data_type', 'is_nullable', 'column_default'],
-        rowCount: result.rowCount,
+        query: query || parsed.query || 'N/A',
+        results: parsed.data || parsed.rows || parsed.columns || parsed.platforms || parsed.distribution || [],
+        columns: parsed.columns || (parsed.data && parsed.data.length > 0 ? Object.keys(parsed.data[0]) : []),
+        rowCount: parsed.row_count || parsed.sample_size || parsed.unique_values || (parsed.data ? parsed.data.length : 0),
         status: 'success',
-        message: `Schema for table '${tableName}': ${result.rowCount} columns`
+        message: parsed.message || `Query completed successfully`,
       };
-    } else {
-      // List all tables
-      const result = await pool.query(`
-        SELECT
-          table_name,
-          table_type
-        FROM information_schema.tables
-        WHERE table_schema = 'public'
-        ORDER BY table_name
-      `);
-
+    } catch (e) {
+      // If it starts with "Error:", treat as error
+      if (dbResult.startsWith('Error:')) {
+        return {
+          query: query || 'N/A',
+          results: [],
+          columns: [],
+          rowCount: 0,
+          status: 'error',
+          error: dbResult.replace('Error: ', ''),
+          message: dbResult
+        };
+      }
+      // Otherwise return as message
       return {
-        query: 'SHOW TABLES',
-        results: result.rows,
-        columns: ['table_name', 'table_type'],
-        rowCount: result.rowCount,
+        query: query || 'N/A',
+        results: [],
+        columns: [],
+        rowCount: 0,
         status: 'success',
-        message: `Found ${result.rowCount} tables in the database`
+        message: dbResult
       };
     }
-  } catch (error: any) {
+  }
+
+  // Already in correct format from executeQuery
+  if (dbResult.success !== undefined) {
     return {
-      query: tableName ? `DESCRIBE TABLE ${tableName}` : 'SHOW TABLES',
-      results: [],
-      columns: [],
-      rowCount: 0,
-      status: 'error',
-      error: error.message
+      query: query || dbResult.query || 'N/A',
+      results: dbResult.rows || [],
+      columns: dbResult.columns || [],
+      rowCount: dbResult.row_count || 0,
+      status: dbResult.success ? 'success' : 'error',
+      error: dbResult.error,
+      message: dbResult.success
+        ? `Query executed successfully. ${dbResult.row_count || 0} rows returned.`
+        : `Query failed: ${dbResult.error}`
     };
   }
+
+  return dbResult;
 }
 
+// Initialize dashboard helper
 async function initializeDashboard(message?: string): Promise<any> {
   const welcomeMessage = message || "Welcome to Vdata Analytics";
 
-  if (!pool) {
+  if (!isDatabaseConfigured) {
     return {
       status: 'error',
       message: welcomeMessage,
@@ -338,20 +370,25 @@ async function initializeDashboard(message?: string): Promise<any> {
   }
 
   try {
-    // Get database status
-    const result = await pool.query(`
-      SELECT
-        COUNT(*) as table_count
-      FROM information_schema.tables
-      WHERE table_schema = 'public'
-    `);
+    // Try to get table count
+    const schemaResult = await executeQuery("SELECT COUNT(*) as table_count FROM information_schema.tables WHERE table_schema = 'public'");
 
-    return {
-      status: 'success',
-      message: `${welcomeMessage}. Connected to database with ${result.rows[0].table_count} tables.`,
-      results: [],
-      columns: []
-    };
+    if (schemaResult.success) {
+      return {
+        status: 'success',
+        message: `${welcomeMessage}. Connected to database with ${schemaResult.rows![0].table_count} tables.`,
+        results: [],
+        columns: []
+      };
+    } else {
+      return {
+        status: 'error',
+        message: welcomeMessage,
+        error: `Failed to connect to database: ${schemaResult.error}`,
+        results: [],
+        columns: []
+      };
+    }
   } catch (error: any) {
     return {
       status: 'error',
@@ -359,6 +396,74 @@ async function initializeDashboard(message?: string): Promise<any> {
       error: `Failed to connect to database: ${error.message}`,
       results: [],
       columns: []
+    };
+  }
+}
+
+// Get schema helper (generic - works for all tables)
+async function getSchemaInfo(tableName?: string): Promise<any> {
+  if (!isDatabaseConfigured) {
+    throw new Error("Database connection not configured. Set DATABASE_URL environment variable.");
+  }
+
+  try {
+    if (tableName) {
+      // Get columns for specific table
+      const result = await executeQuery(`
+        SELECT
+          column_name,
+          data_type,
+          is_nullable,
+          column_default
+        FROM information_schema.columns
+        WHERE table_name = $1
+        ORDER BY ordinal_position
+      `, undefined);
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to fetch schema');
+      }
+
+      return {
+        query: `DESCRIBE TABLE ${tableName}`,
+        results: result.rows,
+        columns: ['column_name', 'data_type', 'is_nullable', 'column_default'],
+        rowCount: result.row_count,
+        status: 'success',
+        message: `Schema for table '${tableName}': ${result.row_count} columns`
+      };
+    } else {
+      // List all tables
+      const result = await executeQuery(`
+        SELECT
+          table_name,
+          table_type
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+        ORDER BY table_name
+      `);
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to list tables');
+      }
+
+      return {
+        query: 'SHOW TABLES',
+        results: result.rows,
+        columns: ['table_name', 'table_type'],
+        rowCount: result.row_count,
+        status: 'success',
+        message: `Found ${result.row_count} tables in the database`
+      };
+    }
+  } catch (error: any) {
+    return {
+      query: tableName ? `DESCRIBE TABLE ${tableName}` : 'SHOW TABLES',
+      results: [],
+      columns: [],
+      rowCount: 0,
+      status: 'error',
+      error: error.message
     };
   }
 }
@@ -428,9 +533,26 @@ function createVdataServer(): Server {
 
       try {
         switch (name) {
+          case "initialize_dashboard": {
+            const args = initializeDashboardSchema.parse(request.params.arguments ?? {});
+            const result = await initializeDashboard(args.message);
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: result.message
+                }
+              ],
+              structuredContent: result,
+              _meta: widgetMeta()
+            };
+          }
+
           case "run_query": {
             const args = runQuerySchema.parse(request.params.arguments ?? {});
-            const result = await executeQuery(args.query, args.limit);
+            const dbResult = await executeQuery(args.query, args.limit);
+            const result = formatDatabaseResult(dbResult, args.query);
 
             return {
               content: [
@@ -446,7 +568,7 @@ function createVdataServer(): Server {
 
           case "get_schema": {
             const args = getSchemaSchema.parse(request.params.arguments ?? {});
-            const result = await getSchema(args.tableName);
+            const result = await getSchemaInfo(args.tableName);
 
             return {
               content: [
@@ -460,15 +582,49 @@ function createVdataServer(): Server {
             };
           }
 
-          case "initialize_dashboard": {
-            const args = z.object({ message: z.string().optional() }).parse(request.params.arguments ?? {});
-            const result = await initializeDashboard(args.message);
+          case "get_sample_data": {
+            const args = getSampleDataSchema.parse(request.params.arguments ?? {});
+            const dbResult = await getSampleData(args.limit);
+            const result = formatDatabaseResult(dbResult, `SELECT * FROM digital_insights LIMIT ${args.limit || 10}`);
 
             return {
               content: [
                 {
                   type: "text",
-                  text: result.message
+                  text: result.message || "Retrieved sample data"
+                }
+              ],
+              structuredContent: result,
+              _meta: widgetMeta()
+            };
+          }
+
+          case "get_database_statistics": {
+            const dbResult = await getDatabaseStatistics();
+            const result = formatDatabaseResult(dbResult, "Database Statistics");
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: result.message || "Retrieved database statistics"
+                }
+              ],
+              structuredContent: result,
+              _meta: widgetMeta()
+            };
+          }
+
+          case "get_column_value_counts": {
+            const args = getColumnValueCountsSchema.parse(request.params.arguments ?? {});
+            const dbResult = await getColumnValueCounts(args.columnName, args.limit);
+            const result = formatDatabaseResult(dbResult, `Column distribution for ${args.columnName}`);
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: result.message || `Retrieved value counts for ${args.columnName}`
                 }
               ],
               structuredContent: result,
@@ -491,7 +647,8 @@ function createVdataServer(): Server {
             status: 'error',
             error: error.message,
             results: [],
-            columns: []
+            columns: [],
+            message: `Error: ${error.message}`
           },
           _meta: widgetMeta(),
           isError: true
@@ -607,7 +764,7 @@ const httpServer = createServer(
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
         status: "ok",
-        database: pool ? "connected" : "not configured"
+        database: isDatabaseConfigured ? "connected" : "not configured"
       }));
       return;
     }
@@ -620,8 +777,8 @@ const httpServer = createServer(
         version: "1.0.0",
         status: "running",
         mcp_endpoint: "/mcp",
-        database: pool ? "connected" : "not configured",
-        tools: tools.map(t => t.name)
+        database: isDatabaseConfigured ? "connected" : "not configured",
+        tools: tools.map(t => ({ name: t.name, title: t.title }))
       }));
       return;
     }
@@ -650,9 +807,7 @@ httpServer.on("clientError", (err: Error, socket) => {
 // Cleanup on shutdown
 process.on('SIGTERM', async () => {
   console.log('SIGTERM received, closing server...');
-  if (pool) {
-    await pool.end();
-  }
+  await closePool();
   httpServer.close();
   process.exit(0);
 });
@@ -665,7 +820,11 @@ httpServer.listen(PORT, "0.0.0.0", () => {
 ║  Port:     ${PORT.toString().padEnd(32)} ║
 ║  SSE:      GET  /mcp${' '.repeat(22)} ║
 ║  POST:     POST /mcp/messages${' '.repeat(11)} ║
-║  Database: ${(pool ? 'Connected ✅' : 'Not configured ⚠️').padEnd(32)} ║
+║  Database: ${(isDatabaseConfigured ? 'Connected ✅' : 'Not configured ⚠️').padEnd(32)} ║
+║  Tools:    ${tools.length} available${' '.repeat(23)} ║
 ╚════════════════════════════════════════════╝
+
+Available Tools:
+${tools.map(t => `  • ${t.name} - ${t.title}`).join('\n')}
   `);
 });

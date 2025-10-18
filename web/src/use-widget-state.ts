@@ -30,12 +30,14 @@ export function useWidgetState<T>(
             ? (state as (prevState: T) => T)(prevState)
             : state;
 
-        // Sync state back to window.openai
+        // Sync state back to window.openai (async Promise<void>)
         if (
           typeof window !== "undefined" &&
           window.openai?.setWidgetState
         ) {
-          window.openai.setWidgetState(newState);
+          window.openai.setWidgetState(newState).catch((error) => {
+            console.error("Failed to sync widget state:", error);
+          });
         }
 
         // Also support legacy oai.widget.setState
