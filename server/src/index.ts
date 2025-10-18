@@ -197,13 +197,13 @@ const tools: Tool[] = [
   },
   {
     name: "run_query",
-    description: "Execute a SELECT query on the PostgreSQL database (digital_insights table) and display results in the analytics dashboard. Automatically adds LIMIT if not specified.",
+    description: "Execute a SELECT query on the PostgreSQL database (digital_insights table) and display results in the analytics dashboard. Automatically adds LIMIT if not specified. IMPORTANT: The table has these key columns: type, cat, genre, age_bucket, gender, nccs_class, state_grp, day_of_week, population, app_name, duration_sum (NOT 'duration'), event_id, user_id. Always use 'duration_sum' for duration-related queries.",
     inputSchema: {
       type: "object",
       properties: {
         query: {
           type: "string",
-          description: "SQL SELECT query to execute"
+          description: "SQL SELECT query to execute. Use 'duration_sum' for duration, not 'duration'."
         },
         limit: {
           type: "number",
