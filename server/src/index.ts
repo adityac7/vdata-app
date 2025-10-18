@@ -1,32 +1,36 @@
 #!/usr/bin/env node
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import { z } from "zod";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
-import express from "express";
-import cors from "cors";
+import { URL } from "url";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import {
+  CallToolRequestSchema,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
+  ListToolsRequestSchema,
+  type CallToolRequest,
+  type ListResourcesRequest,
+  type ReadResourceRequest,
+  type ListToolsRequest,
+  type Resource,
+  type Tool,
+} from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Get port from environment or default to 8000
 const PORT = parseInt(process.env.PORT || "8000", 10);
-const HOST = process.env.HOST || "0.0.0.0";
-
-// Create MCP server
-const server = new McpServer({
-  name: "vdata-app",
-  version: "1.0.0"
-});
 
 // Load the built React component
 let COMPONENT_JS = "";
 let COMPONENT_CSS = "";
 
 try {
-  // In production, these will be in the web/dist folder
   COMPONENT_JS = readFileSync(join(__dirname, "../../web/dist/component.js"), "utf8");
   console.log("✅ Loaded component.js");
 } catch (error) {
@@ -51,17 +55,9 @@ try {
   `;
 }
 
-// Register the UI resource
-server.registerResource(
-  "vdata-widget",
-  "ui://vdata/main.html",
-  {},
-  async () => ({
-    contents: [
-      {
-        uri: "ui://vdata/main.html",
-        mimeType: "text/html+skybridge",
-        text: `
+// Widget configuration
+const WIDGET_URI = "ui://vdata/main.html";
+const WIDGET_HTML = `
 <!DOCTYPE html>
 <html>
 <head>
@@ -74,105 +70,301 @@ server.registerResource(
   <script type="module">${COMPONENT_JS}</script>
 </body>
 </html>
-        `.trim(),
-        _meta: {
-          "openai/widgetPrefersBorder": true,
-          "openai/widgetDomain": "https://chatgpt.com",
-          "openai/widgetCSP": {
-            connect_domains: [],
-            resource_domains: []
-          }
-        }
-      }
-    ]
-  })
-);
+`.trim();
 
-// Register a simple test tool
-server.registerTool(
-  "show_vdata_app",
+// Define resources
+const resources: Resource[] = [
   {
-    title: "Show Vdata App",
-    description: "Display the Vdata App interface with a welcome message",
+    uri: WIDGET_URI,
+    name: "Vdata App Widget",
+    description: "Vdata App UI component",
+    mimeType: "text/html+skybridge",
     _meta: {
-      "openai/outputTemplate": "ui://vdata/main.html",
-      "openai/toolInvocation/invoking": "Loading Vdata App...",
-      "openai/toolInvocation/invoked": "Vdata App loaded"
-    },
-    inputSchema: {
-      message: z.string().optional().describe("Optional message to display")
-    }
-  },
-  async (args) => {
-    const message = args.message || "Welcome to Vdata App!";
-    
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Displaying Vdata App: ${message}`
-        }
-      ],
-      structuredContent: {
-        message: message,
-        timestamp: new Date().toISOString(),
-        status: "success"
+      "openai/widgetPrefersBorder": true,
+      "openai/widgetDomain": "https://chatgpt.com",
+      "openai/widgetCSP": {
+        connect_domains: [],
+        resource_domains: []
       }
-    };
+    }
+  }
+];
+
+// Define tools
+const tools: Tool[] = [
+  {
+    name: "show_vdata_app",
+    description: "Display the Vdata App interface with a welcome message",
+    inputSchema: {
+      type: "object",
+      properties: {
+        message: {
+          type: "string",
+          description: "Optional message to display"
+        }
+      },
+      additionalProperties: false
+    },
+    title: "Show Vdata App",
+    _meta: {
+      "openai/outputTemplate": WIDGET_URI,
+      "openai/toolInvocation/invoking": "Loading Vdata App...",
+      "openai/toolInvocation/invoked": "Vdata App loaded",
+      "openai/widgetAccessible": true,
+      "openai/resultCanProduceWidget": true
+    },
+    annotations: {
+      destructiveHint: false,
+      openWorldHint: false,
+      readOnlyHint: true
+    }
+  }
+];
+
+// Tool input parser
+const toolInputParser = z.object({
+  message: z.string().optional()
+});
+
+// Create MCP server instance
+function createVdataServer(): Server {
+  const server = new Server(
+    {
+      name: "vdata-app",
+      version: "1.0.0"
+    },
+    {
+      capabilities: {
+        resources: {},
+        tools: {}
+      }
+    }
+  );
+
+  // Handle list resources
+  server.setRequestHandler(
+    ListResourcesRequestSchema,
+    async (_request: ListResourcesRequest) => ({
+      resources
+    })
+  );
+
+  // Handle read resource
+  server.setRequestHandler(
+    ReadResourceRequestSchema,
+    async (request: ReadResourceRequest) => {
+      if (request.params.uri !== WIDGET_URI) {
+        throw new Error(`Unknown resource: ${request.params.uri}`);
+      }
+
+      return {
+        contents: [
+          {
+            uri: WIDGET_URI,
+            mimeType: "text/html+skybridge",
+            text: WIDGET_HTML,
+            _meta: {
+              "openai/widgetPrefersBorder": true,
+              "openai/widgetDomain": "https://chatgpt.com",
+              "openai/widgetCSP": {
+                connect_domains: [],
+                resource_domains: []
+              }
+            }
+          }
+        ]
+      };
+    }
+  );
+
+  // Handle list tools
+  server.setRequestHandler(
+    ListToolsRequestSchema,
+    async (_request: ListToolsRequest) => ({
+      tools
+    })
+  );
+
+  // Handle call tool
+  server.setRequestHandler(
+    CallToolRequestSchema,
+    async (request: CallToolRequest) => {
+      if (request.params.name !== "show_vdata_app") {
+        throw new Error(`Unknown tool: ${request.params.name}`);
+      }
+
+      const args = toolInputParser.parse(request.params.arguments ?? {});
+      const message = args.message || "Welcome to Vdata App!";
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Displaying Vdata App: ${message}`
+          }
+        ],
+        structuredContent: {
+          message: message,
+          timestamp: new Date().toISOString(),
+          status: "success"
+        },
+        _meta: {
+          "openai/outputTemplate": WIDGET_URI
+        }
+      };
+    }
+  );
+
+  return server;
+}
+
+// Session management
+type SessionRecord = {
+  server: Server;
+  transport: SSEServerTransport;
+};
+
+const sessions = new Map<string, SessionRecord>();
+
+const ssePath = "/mcp";
+const postPath = "/mcp/messages";
+
+// Handle SSE connection (GET /mcp)
+async function handleSseRequest(res: ServerResponse) {
+  console.log("📡 New SSE connection");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  
+  const server = createVdataServer();
+  const transport = new SSEServerTransport(postPath, res);
+  const sessionId = transport.sessionId;
+
+  sessions.set(sessionId, { server, transport });
+
+  transport.onclose = async () => {
+    console.log(`🔌 Session closed: ${sessionId}`);
+    sessions.delete(sessionId);
+  };
+
+  transport.onerror = (error) => {
+    console.error("SSE transport error", error);
+  };
+
+  try {
+    await server.connect(transport);
+  } catch (error) {
+    sessions.delete(sessionId);
+    console.error("Failed to start SSE session", error);
+    if (!res.headersSent) {
+      res.writeHead(500).end("Failed to establish SSE connection");
+    }
+  }
+}
+
+// Handle POST messages (POST /mcp/messages?sessionId=xxx)
+async function handlePostMessage(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL
+) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "content-type");
+  
+  const sessionId = url.searchParams.get("sessionId");
+
+  if (!sessionId) {
+    res.writeHead(400).end("Missing sessionId query parameter");
+    return;
+  }
+
+  const session = sessions.get(sessionId);
+
+  if (!session) {
+    res.writeHead(404).end("Unknown session");
+    return;
+  }
+
+  try {
+    await session.transport.handlePostMessage(req, res);
+  } catch (error) {
+    console.error("Failed to process message", error);
+    if (!res.headersSent) {
+      res.writeHead(500).end("Failed to process message");
+    }
+  }
+}
+
+// Create HTTP server
+const httpServer = createServer(
+  async (req: IncomingMessage, res: ServerResponse) => {
+    if (!req.url) {
+      res.writeHead(400).end("Missing URL");
+      return;
+    }
+
+    const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
+
+    // Handle CORS preflight
+    if (
+      req.method === "OPTIONS" &&
+      (url.pathname === ssePath || url.pathname === postPath)
+    ) {
+      res.writeHead(204, {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "content-type",
+      });
+      res.end();
+      return;
+    }
+
+    // Health check
+    if (req.method === "GET" && url.pathname === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok" }));
+      return;
+    }
+
+    // Server info
+    if (req.method === "GET" && url.pathname === "/") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        name: "Vdata App MCP Server",
+        version: "1.0.0",
+        status: "running",
+        mcp_endpoint: "/mcp"
+      }));
+      return;
+    }
+
+    // SSE endpoint
+    if (req.method === "GET" && url.pathname === ssePath) {
+      await handleSseRequest(res);
+      return;
+    }
+
+    // POST messages endpoint
+    if (req.method === "POST" && url.pathname === postPath) {
+      await handlePostMessage(req, res, url);
+      return;
+    }
+
+    res.writeHead(404).end("Not Found");
   }
 );
 
-// Create Express app
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-// Health check endpoint
-app.get("/", (req, res) => {
-  res.json({
-    name: "Vdata App MCP Server",
-    version: "1.0.0",
-    status: "running",
-    mcp_endpoint: "/mcp"
-  });
+httpServer.on("clientError", (err: Error, socket) => {
+  console.error("HTTP client error", err);
+  socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
 });
 
-app.get("/health", (req, res) => {
-  res.json({ status: "ok" });
-});
-
-// MCP endpoint using SSE transport
-app.get("/mcp", async (req, res) => {
-  console.log("📡 New MCP connection via SSE");
-  
-  const transport = new SSEServerTransport("/mcp", res);
-  await server.connect(transport);
-  
-  // Keep connection alive
-  req.on("close", () => {
-    console.log("🔌 MCP connection closed");
-  });
-});
-
-app.post("/mcp", async (req, res) => {
-  console.log("📨 MCP POST request");
-  
-  const transport = new SSEServerTransport("/mcp", res);
-  await server.connect(transport);
-  
-  // Handle the request
-  await transport.handlePostMessage(req.body, res);
-});
-
-// Start the server
-app.listen(PORT, HOST, () => {
+httpServer.listen(PORT, "0.0.0.0", () => {
   console.log(`
 ╔════════════════════════════════════════╗
 ║   🚀 Vdata App MCP Server Running     ║
 ╠════════════════════════════════════════╣
-║  Host: ${HOST.padEnd(30)} ║
-║  Port: ${PORT.toString().padEnd(30)} ║
-║  MCP:  http://localhost:${PORT}/mcp${' '.repeat(9)}║
+║  Port: ${PORT.toString().padEnd(32)} ║
+║  SSE:  GET  /mcp${' '.repeat(24)} ║
+║  POST: POST /mcp/messages${' '.repeat(13)} ║
 ╚════════════════════════════════════════╝
   `);
 });
