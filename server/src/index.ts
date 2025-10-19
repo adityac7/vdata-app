@@ -34,6 +34,7 @@ const __dirname = dirname(__filename);
 // Get port and database URL from environment
 const PORT = parseInt(process.env.PORT || "8000", 10);
 const DATABASE_URL = process.env.DATABASE_URL;
+const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 
 // Check if database is configured
 const isDatabaseConfigured = !!DATABASE_URL;
@@ -81,11 +82,11 @@ const WIDGET_HTML = `
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>${COMPONENT_CSS}</style>
+  <link rel="stylesheet" href="${BASE_URL}/assets/component.css">
 </head>
 <body>
   <div id="vdata-root"></div>
-  <script type="module">${COMPONENT_JS}</script>
+  <script type="module" src="${BASE_URL}/assets/component.js"></script>
 </body>
 </html>
 `.trim();
@@ -113,7 +114,7 @@ const resources: Resource[] = [
       "openai/widgetCSP": {
         // connect_domains requires full URLs, not just hostnames
         connect_domains: DATABASE_URL ? [`https://${new URL(DATABASE_URL).hostname}`] : [],
-        resource_domains: []
+        resource_domains: [BASE_URL]
       }
     })
   }
@@ -535,7 +536,7 @@ function createVdataServer(): Server {
               "openai/widgetCSP": {
                 // connect_domains requires full URLs, not just hostnames
                 connect_domains: DATABASE_URL ? [`https://${new URL(DATABASE_URL).hostname}`] : [],
-                resource_domains: []
+                resource_domains: [BASE_URL]
               }
             })
           }
@@ -822,6 +823,39 @@ const httpServer = createServer(
     if (req.method === "POST" && url.pathname === postPath) {
       await handlePostMessage(req, res, url);
       return;
+    }
+
+    // Static asset serving for component files
+    if (req.method === "GET" && url.pathname.startsWith("/assets/")) {
+      const fileName = url.pathname.replace("/assets/", "");
+
+      // Only allow component.js and component.css
+      if (fileName === "component.js" || fileName === "component.css") {
+        try {
+          const filePath = join(__dirname, "../../web/dist", fileName);
+          const fileContent = readFileSync(filePath, "utf8");
+
+          // Set proper MIME type
+          const mimeType = fileName.endsWith(".js")
+            ? "application/javascript"
+            : "text/css";
+
+          res.writeHead(200, {
+            "Content-Type": mimeType,
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "public, max-age=3600", // Cache for 1 hour
+          });
+          res.end(fileContent);
+          return;
+        } catch (error) {
+          console.error(`Failed to serve ${fileName}:`, error);
+          res.writeHead(404).end("Asset not found");
+          return;
+        }
+      } else {
+        res.writeHead(403).end("Forbidden");
+        return;
+      }
     }
 
     res.writeHead(404).end("Not Found");
