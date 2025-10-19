@@ -34,7 +34,8 @@ const __dirname = dirname(__filename);
 // Get port and database URL from environment
 const PORT = parseInt(process.env.PORT || "8000", 10);
 const DATABASE_URL = process.env.DATABASE_URL;
-const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
+// Use Render's auto-provided RENDER_EXTERNAL_URL first, then BASE_URL, then localhost
+const BASE_URL = process.env.RENDER_EXTERNAL_URL || process.env.BASE_URL || `http://localhost:${PORT}`;
 
 // Check if database is configured
 const isDatabaseConfigured = !!DATABASE_URL;
@@ -118,13 +119,7 @@ const resources: Resource[] = [
     name: "Vdata Analytics Dashboard",
     description: "Interactive analytics dashboard for PostgreSQL data",
     mimeType: "text/html+skybridge",
-    _meta: widgetMeta({
-      "openai/widgetCSP": {
-        // connect_domains requires full URLs, not just hostnames
-        connect_domains: DATABASE_URL ? [`https://${new URL(DATABASE_URL).hostname}`] : [],
-        resource_domains: [BASE_URL]
-      }
-    })
+    _meta: widgetMeta()  // CSP already included in widgetMeta() function
   }
 ];
 
