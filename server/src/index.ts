@@ -87,11 +87,12 @@ const WIDGET_HTML = `
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { width: 100%; height: 100%; }
     #vdata-root { width: 100%; height: 100%; }
+    ${COMPONENT_CSS}
   </style>
 </head>
 <body>
   <div id="vdata-root"></div>
-  <script type="module" src="${BASE_URL}/assets/component.js"></script>
+  <script type="module">${COMPONENT_JS}</script>
 </body>
 </html>
 `.trim();
@@ -105,8 +106,8 @@ function widgetMeta(additionalMeta: Record<string, any> = {}) {
     "openai/widgetPrefersBorder": true,
     "openai/widgetDomain": "https://chatgpt.com",
     "openai/widgetCSP": {
-      connect_domains: DATABASE_URL ? [`https://${new URL(DATABASE_URL).hostname}`] : [],
-      resource_domains: [BASE_URL]
+      connect_domains: [],  // No external API calls needed - widget uses window.openai
+      resource_domains: []   // All assets inlined in HTML
     },
     ...additionalMeta,
   };
