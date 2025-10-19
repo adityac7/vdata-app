@@ -82,7 +82,11 @@ const WIDGET_HTML = `
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="stylesheet" href="${BASE_URL}/assets/component.css">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; }
+    #vdata-root { width: 100%; height: 100%; }
+  </style>
 </head>
 <body>
   <div id="vdata-root"></div>
@@ -99,6 +103,10 @@ function widgetMeta(additionalMeta: Record<string, any> = {}) {
     "openai/resultCanProduceWidget": true,
     "openai/widgetPrefersBorder": true,
     "openai/widgetDomain": "https://chatgpt.com",
+    "openai/widgetCSP": {
+      connect_domains: DATABASE_URL ? [`https://${new URL(DATABASE_URL).hostname}`] : [],
+      resource_domains: [BASE_URL]
+    },
     ...additionalMeta,
   };
 }
@@ -532,13 +540,7 @@ function createVdataServer(): Server {
             uri: WIDGET_URI,
             mimeType: "text/html+skybridge",
             text: WIDGET_HTML,
-            _meta: widgetMeta({
-              "openai/widgetCSP": {
-                // connect_domains requires full URLs, not just hostnames
-                connect_domains: DATABASE_URL ? [`https://${new URL(DATABASE_URL).hostname}`] : [],
-                resource_domains: [BASE_URL]
-              }
-            })
+            _meta: widgetMeta()
           }
         ]
       };
