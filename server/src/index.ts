@@ -273,7 +273,7 @@ const tools: Tool[] = [
   },
   {
     name: "get_schema",
-    description: "Get database schema information. If tableName is provided, returns column details for that table. Otherwise, lists all tables in the database.",
+    description: "Get database schema information. If tableName is provided, returns column details for that table (showing up to 5 entries). Otherwise, lists all tables in the database (first 5 only).",
     inputSchema: {
       type: "object",
       properties: {
