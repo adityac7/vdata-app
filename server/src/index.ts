@@ -69,9 +69,25 @@ if (COMPONENT_PLACEHOLDER) {
 
 // Widget configuration
 const WIDGET_URI = "ui://vdata/analytics-dashboard.html";
-const assetBase = new URL("/assets/", BASE_URL).toString();
-const widgetStylesheetHref = new URL("component.css", assetBase).toString();
-const widgetScriptSrc = new URL("component.js", assetBase).toString();
+const assetBasePath = "/assets/";
+const widgetStylesheetHref = `${assetBasePath}component.css`;
+const widgetScriptSrc = `${assetBasePath}component.js`;
+
+const widgetDomain = (() => {
+  if (!BASE_ORIGIN) {
+    return undefined;
+  }
+
+  if (BASE_ORIGIN.includes("chatgpt.com")) {
+    console.warn(
+      "⚠️  BASE_URL/RENDER_EXTERNAL_URL resolves to chatgpt.com. " +
+        "Widget domain metadata will be omitted so ChatGPT falls back to the resource origin."
+    );
+    return undefined;
+  }
+
+  return BASE_ORIGIN;
+})();
 
 const WIDGET_HTML = (COMPONENT_PLACEHOLDER
   ? `
@@ -113,20 +129,30 @@ const WIDGET_HTML = (COMPONENT_PLACEHOLDER
 </html>
 `.trim());
 
+const MAX_WIDGET_ROWS = 5;
+
 // Helper function to create widget metadata
 function widgetMeta(additionalMeta: Record<string, any> = {}) {
-  return {
+  const { "openai/widgetCSP": additionalCsp, ...restMeta } = additionalMeta;
+
+  const meta: Record<string, any> = {
     "openai/outputTemplate": WIDGET_URI,
     "openai/widgetAccessible": true,
     "openai/resultCanProduceWidget": true,
     "openai/widgetPrefersBorder": true,
-    "openai/widgetDomain": BASE_ORIGIN,
     "openai/widgetCSP": {
-      connect_domains: [],  // No external API calls needed - widget uses window.openai
-      resource_domains: [BASE_ORIGIN]
+      connect_domains: [], // No external API calls needed - widget uses window.openai
+      resource_domains: widgetDomain ? [widgetDomain] : [],
+      ...(additionalCsp ?? {}),
     },
-    ...additionalMeta,
+    ...restMeta,
   };
+
+  if (widgetDomain) {
+    meta["openai/widgetDomain"] = widgetDomain;
+  }
+
+  return meta;
 }
 
 // Define resources
@@ -218,7 +244,7 @@ const tools: Tool[] = [
   },
   {
     name: "run_query",
-    description: "Execute a SELECT query on the PostgreSQL database (digital_insights table) and display results in the analytics dashboard. Automatically adds LIMIT if not specified. IMPORTANT: The table has these key columns: type, cat, genre, age_bucket, gender, nccs_class, state_grp, day_of_week, population, app_name, duration_sum (NOT 'duration'), event_id, user_id. Always use 'duration_sum' for duration-related queries.",
+    description: "Execute a SELECT query on the PostgreSQL database (digital_insights table) and display results in the analytics dashboard. Automatically adds LIMIT if not specified and only shows the first 5 rows in ChatGPT. IMPORTANT: The table has these key columns: type, cat, genre, age_bucket, gender, nccs_class, state_grp, day_of_week, population, app_name, duration_sum (NOT 'duration'), event_id, user_id. Always use 'duration_sum' for duration-related queries.",
     inputSchema: {
       type: "object",
       properties: {
@@ -247,7 +273,7 @@ const tools: Tool[] = [
   },
   {
     name: "get_schema",
-    description: "Get database schema information. If tableName is provided, returns column details for that table. Otherwise, lists all tables in the database.",
+    description: "Get database schema information. If tableName is provided, returns column details for that table (showing up to 5 entries). Otherwise, lists all tables in the database (first 5 only).",
     inputSchema: {
       type: "object",
       properties: {
@@ -271,7 +297,7 @@ const tools: Tool[] = [
   },
   {
     name: "get_sample_data",
-    description: "Get a sample of rows from the digital_insights table to preview the data structure and content",
+    description: "Get a sample of rows from the digital_insights table to preview the data structure and content (dashboard displays at most 5 rows).",
     inputSchema: {
       type: "object",
       properties: {
@@ -295,7 +321,7 @@ const tools: Tool[] = [
   },
   {
     name: "get_database_statistics",
-    description: "Get statistics about the digital_insights table including total row count and platform distribution (type, count, avg duration, percentage)",
+    description: "Get statistics about the digital_insights table including total row count and platform distribution (type, count, avg duration, percentage). Only the first 5 summary rows are shown in ChatGPT.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -314,7 +340,7 @@ const tools: Tool[] = [
   },
   {
     name: "get_column_value_counts",
-    description: "Get value distribution for a specific column in the digital_insights table. Shows count and percentage for each unique value.",
+    description: "Get value distribution for a specific column in the digital_insights table. Shows count and percentage for each unique value (top 5 values displayed in ChatGPT).",
     inputSchema: {
       type: "object",
       properties: {
@@ -345,58 +371,157 @@ const tools: Tool[] = [
 
 // Helper to format database.ts results for dashboard
 function formatDatabaseResult(dbResult: any, query?: string): any {
+  const limitRows = (rows?: any[]) => {
+    if (!Array.isArray(rows)) {
+      return { rows: [], truncated: false };
+    }
+
+    const limited = rows.slice(0, MAX_WIDGET_ROWS);
+    return {
+      rows: limited,
+      truncated: rows.length > limited.length,
+    };
+  };
+
+  const appendTruncationMessage = (message: string | undefined, truncated: boolean, totalRows: number) => {
+    if (!truncated) {
+      return message;
+    }
+
+    const note = `Showing first ${MAX_WIDGET_ROWS} of ${totalRows} rows.`;
+    return message ? `${message.trim()} ${note}` : note;
+  };
+
+  const prepareResult = (params: {
+    queryLabel: string;
+    rows?: any[];
+    columns?: string[];
+    rowCount?: number;
+    status: 'success' | 'error';
+    message?: string;
+    error?: string;
+  }) => {
+    const safeRows = Array.isArray(params.rows) ? params.rows : [];
+    const { rows: limitedRows, truncated } = limitRows(safeRows);
+    const inferredColumns = Array.isArray(params.columns) && params.columns.length > 0
+      ? params.columns
+      : limitedRows.length > 0
+        ? Object.keys(limitedRows[0])
+        : [];
+    const totalRows = typeof params.rowCount === 'number'
+      ? params.rowCount
+      : safeRows.length;
+
+    return {
+      query: params.queryLabel,
+      results: limitedRows,
+      columns: inferredColumns,
+      rowCount: totalRows,
+      status: params.status,
+      error: params.error,
+      message: params.status === 'success'
+        ? appendTruncationMessage(params.message, truncated, totalRows)
+        : params.message,
+      truncated,
+      displayLimit: MAX_WIDGET_ROWS,
+    };
+  };
+
+  const asRowArray = (value: any) => {
+    if (Array.isArray(value) && (value.length === 0 || typeof value[0] === 'object')) {
+      return value;
+    }
+    return undefined;
+  };
+
+  const asStringArray = (value: any) => {
+    if (Array.isArray(value) && value.every((item) => typeof item === 'string')) {
+      return value;
+    }
+    return undefined;
+  };
+
   if (typeof dbResult === 'string') {
-    // Parse JSON string response from database.ts functions
     try {
       const parsed = JSON.parse(dbResult);
 
-      // Convert to dashboard format
-      return {
-        query: query || parsed.query || 'N/A',
-        results: parsed.data || parsed.rows || parsed.columns || parsed.platforms || parsed.distribution || [],
-        columns: parsed.columns || (parsed.data && parsed.data.length > 0 ? Object.keys(parsed.data[0]) : []),
-        rowCount: parsed.row_count || parsed.sample_size || parsed.unique_values || (parsed.data ? parsed.data.length : 0),
+      const rowData =
+        asRowArray(parsed.data) ||
+        asRowArray(parsed.rows) ||
+        asRowArray(parsed.results) ||
+        asRowArray(parsed.platforms) ||
+        asRowArray(parsed.distribution) ||
+        asRowArray(parsed.columns) ||
+        [];
+
+      const columnList =
+        asStringArray(parsed.columns) ||
+        (rowData.length > 0 ? Object.keys(rowData[0]) : []);
+
+      const totalRows =
+        typeof parsed.row_count === 'number'
+          ? parsed.row_count
+          : typeof parsed.sample_size === 'number'
+            ? parsed.sample_size
+            : typeof parsed.unique_values === 'number'
+              ? parsed.unique_values
+              : typeof parsed.total_rows === 'number'
+                ? parsed.total_rows
+                : rowData.length;
+
+      return prepareResult({
+        queryLabel: query || parsed.query || 'N/A',
+        rows: rowData,
+        columns: columnList,
+        rowCount: totalRows,
         status: 'success',
-        message: parsed.message || `Query completed successfully`,
-      };
+        message: parsed.message || 'Query completed successfully',
+      });
     } catch (e) {
-      // If it starts with "Error:", treat as error
       if (dbResult.startsWith('Error:')) {
-        return {
-          query: query || 'N/A',
-          results: [],
+        return prepareResult({
+          queryLabel: query || 'N/A',
+          rows: [],
           columns: [],
           rowCount: 0,
           status: 'error',
           error: dbResult.replace('Error: ', ''),
-          message: dbResult
-        };
+          message: dbResult,
+        });
       }
-      // Otherwise return as message
-      return {
-        query: query || 'N/A',
-        results: [],
+
+      return prepareResult({
+        queryLabel: query || 'N/A',
+        rows: [],
         columns: [],
         rowCount: 0,
         status: 'success',
-        message: dbResult
-      };
+        message: dbResult,
+      });
     }
   }
 
-  // Already in correct format from executeQuery
   if (dbResult.success !== undefined) {
-    return {
-      query: query || dbResult.query || 'N/A',
-      results: dbResult.rows || [],
-      columns: dbResult.columns || [],
-      rowCount: dbResult.row_count || 0,
-      status: dbResult.success ? 'success' : 'error',
+    if (dbResult.success) {
+      return prepareResult({
+        queryLabel: query || dbResult.query || 'N/A',
+        rows: dbResult.rows || [],
+        columns: dbResult.columns || [],
+        rowCount: typeof dbResult.row_count === 'number' ? dbResult.row_count : undefined,
+        status: 'success',
+        message: dbResult.message || `Query executed successfully. ${dbResult.row_count || (dbResult.rows ? dbResult.rows.length : 0)} rows returned.`,
+      });
+    }
+
+    return prepareResult({
+      queryLabel: query || dbResult.query || 'N/A',
+      rows: [],
+      columns: [],
+      rowCount: 0,
+      status: 'error',
       error: dbResult.error,
-      message: dbResult.success
-        ? `Query executed successfully. ${dbResult.row_count || 0} rows returned.`
-        : `Query failed: ${dbResult.error}`
-    };
+      message: `Query failed: ${dbResult.error}`,
+    });
   }
 
   return dbResult;
@@ -412,7 +537,9 @@ async function initializeDashboard(message?: string): Promise<any> {
       message: welcomeMessage,
       error: 'Database not connected. Please configure DATABASE_URL environment variable.',
       results: [],
-      columns: []
+      columns: [],
+      truncated: false,
+      displayLimit: MAX_WIDGET_ROWS,
     };
   }
 
@@ -425,7 +552,9 @@ async function initializeDashboard(message?: string): Promise<any> {
         status: 'success',
         message: `${welcomeMessage}. Connected to database with ${schemaResult.rows![0].table_count} tables.`,
         results: [],
-        columns: []
+        columns: [],
+        truncated: false,
+        displayLimit: MAX_WIDGET_ROWS,
       };
     } else {
       return {
@@ -433,7 +562,9 @@ async function initializeDashboard(message?: string): Promise<any> {
         message: welcomeMessage,
         error: `Failed to connect to database: ${schemaResult.error}`,
         results: [],
-        columns: []
+        columns: [],
+        truncated: false,
+        displayLimit: MAX_WIDGET_ROWS,
       };
     }
   } catch (error: any) {
@@ -442,7 +573,9 @@ async function initializeDashboard(message?: string): Promise<any> {
       message: welcomeMessage,
       error: `Failed to connect to database: ${error.message}`,
       results: [],
-      columns: []
+      columns: [],
+      truncated: false,
+      displayLimit: MAX_WIDGET_ROWS,
     };
   }
 }
@@ -465,19 +598,28 @@ async function getSchemaInfo(tableName?: string): Promise<any> {
         FROM information_schema.columns
         WHERE table_name = $1
         ORDER BY ordinal_position
-      `, undefined);
+      `, undefined, [tableName]);
 
       if (!result.success) {
         throw new Error(result.error || 'Failed to fetch schema');
       }
 
+      const rows = result.rows ?? [];
+      const limitedRows = rows.slice(0, MAX_WIDGET_ROWS);
+      const rowCount = typeof result.row_count === 'number' ? result.row_count : rows.length;
+      const truncated = rowCount > limitedRows.length;
+
       return {
         query: `DESCRIBE TABLE ${tableName}`,
-        results: result.rows,
+        results: limitedRows,
         columns: ['column_name', 'data_type', 'is_nullable', 'column_default'],
-        rowCount: result.row_count,
+        rowCount,
         status: 'success',
-        message: `Schema for table '${tableName}': ${result.row_count} columns`
+        message: truncated
+          ? `Schema for table '${tableName}': ${rowCount} columns. Showing first ${MAX_WIDGET_ROWS}.`
+          : `Schema for table '${tableName}': ${rowCount} columns`,
+        truncated,
+        displayLimit: MAX_WIDGET_ROWS,
       };
     } else {
       // List all tables
@@ -494,13 +636,22 @@ async function getSchemaInfo(tableName?: string): Promise<any> {
         throw new Error(result.error || 'Failed to list tables');
       }
 
+      const rows = result.rows ?? [];
+      const limitedRows = rows.slice(0, MAX_WIDGET_ROWS);
+      const rowCount = typeof result.row_count === 'number' ? result.row_count : rows.length;
+      const truncated = rowCount > limitedRows.length;
+
       return {
         query: 'SHOW TABLES',
-        results: result.rows,
+        results: limitedRows,
         columns: ['table_name', 'table_type'],
-        rowCount: result.row_count,
+        rowCount,
         status: 'success',
-        message: `Found ${result.row_count} tables in the database`
+        message: truncated
+          ? `Found ${rowCount} tables in the database. Showing first ${MAX_WIDGET_ROWS}.`
+          : `Found ${rowCount} tables in the database`,
+        truncated,
+        displayLimit: MAX_WIDGET_ROWS,
       };
     }
   } catch (error: any) {
@@ -510,7 +661,9 @@ async function getSchemaInfo(tableName?: string): Promise<any> {
       columns: [],
       rowCount: 0,
       status: 'error',
-      error: error.message
+      error: error.message,
+      truncated: false,
+      displayLimit: MAX_WIDGET_ROWS,
     };
   }
 }
@@ -839,27 +992,35 @@ const httpServer = createServer(
       return;
     }
 
-    // Static asset serving for component files
-    if (req.method === "GET" && url.pathname.startsWith("/assets/")) {
+    // Static asset serving for component files (support GET and HEAD)
+    if ((req.method === "GET" || req.method === "HEAD") && url.pathname.startsWith("/assets/")) {
       const fileName = url.pathname.replace("/assets/", "");
 
       // Only allow component.js and component.css
       if (fileName === "component.js" || fileName === "component.css") {
         try {
           const filePath = join(__dirname, "../../web/dist", fileName);
-          const fileContent = readFileSync(filePath, "utf8");
+          const fileBuffer = readFileSync(filePath);
 
           // Set proper MIME type
           const mimeType = fileName.endsWith(".js")
             ? "application/javascript"
             : "text/css";
 
-          res.writeHead(200, {
+          const headers: Record<string, string | number> = {
             "Content-Type": mimeType,
             "Access-Control-Allow-Origin": "*",
             "Cache-Control": "public, max-age=3600", // Cache for 1 hour
-          });
-          res.end(fileContent);
+            "Content-Length": fileBuffer.length,
+          };
+
+          res.writeHead(200, headers);
+
+          if (req.method === "HEAD") {
+            res.end();
+          } else {
+            res.end(fileBuffer);
+          }
           return;
         } catch (error) {
           console.error(`Failed to serve ${fileName}:`, error);

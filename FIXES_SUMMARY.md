@@ -175,6 +175,21 @@ Dashboard now:
 
 ---
 
+### 8. ❌ Widget Assets Misconfigured / Payloads Too Large → ✅ FIXED
+
+**Problem**:
+- Widget metadata referenced `https://chatgpt.com`, so ChatGPT tried to load scripts from itself and the UI never mounted
+- Tool responses streamed up to 1000 rows, overwhelming the chat timeline and exceeding Apps SDK guidance
+
+**Fix**:
+- Switched widget resource links to relative `/assets/` paths and only emit `openai/widgetDomain` when a valid deployment origin is configured
+- Added centralized row-limiting (5 rows) across all tools and updated descriptions/UI messaging so truncation is explicit
+- Parameterized schema queries to avoid placeholder bugs while preserving the row cap
+
+**Result**: ChatGPT reliably loads the widget bundle from the MCP server and only receives lightweight result sets that respect the sandbox limits
+
+---
+
 ## Deployment Configuration Fixed
 
 ### ✅ render.yaml Updated

@@ -26,6 +26,13 @@ The widget HTML was being delivered without a reliable way to ensure the compile
 
 - When the bundle cannot be built, the helper now returns explicit placeholder HTML so the issue is visible in ChatGPT instead of failing silently.
 
+### 4. Align Widget Delivery with ChatGPT Sandbox Expectations
+**Files:** `server/src/index.ts`, `web/src/component.tsx`
+
+- Switched widget assets to use relative `/assets/` paths and omit an invalid `openai/widgetDomain` when the configured base URL mistakenly points at `chatgpt.com`, ensuring ChatGPT pulls scripts from the MCP server instead of itself.
+- Added a hard cap of five rows for every tool response, including schema listings, with UI messaging that highlights when data is truncated so operators know to refine queries.
+- Extended schema fetching to use parameter binding and clarified tool descriptions so ChatGPT's semantic layer understands the row limits and avoids requesting overly broad results.
+
 ## Why These Fixes Work
 
 1. **Matches Apps SDK Patterns** – Serving static assets through `/assets` mirrors the official examples, allowing ChatGPT to fetch the React bundle exactly where metadata says it lives.
@@ -37,6 +44,7 @@ The widget HTML was being delivered without a reliable way to ensure the compile
 - [x] Widget renders in ChatGPT UI
 - [x] Tool calls still work correctly
 - [x] Query results display in the widget
+- [x] Row limits enforced (5 rows shown, message indicates truncation)
 - [x] Theme switching works (light/dark)
 - [x] Display mode changes work (inline/fullscreen)
 - [x] Query history is tracked
