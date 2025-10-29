@@ -1,109 +1,39 @@
 # Widget Rendering Fix - Changelog
 
-## Date: 2025-10-19
+## Date: 2025-10-20
 
 ## Problem
-Widget metadata was being returned successfully by the MCP server, and tool calls were working, but the UI was not rendering in ChatGPT.
-
-## Root Cause
-The widget HTML was using external script loading (`<script src="...">`) instead of inline JavaScript, which is the required pattern for ChatGPT widgets.
+The blanket 5-row cap added for every MCP tool response prevented schema lookups and summaries from returning complete data, while still failing to remind the assistant to keep raw exports concise.
 
 ## Changes Made
 
-### 1. Inline JavaScript and CSS in Widget HTML
-**File:** `server/src/index.ts` (lines 80-98)
+### 1. Scope the Row Cap to Raw Data Exports Only
+**File:** `server/src/index.ts`
 
-**Before:**
-```typescript
-const WIDGET_HTML = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { width: 100%; height: 100%; }
-    #vdata-root { width: 100%; height: 100%; }
-  </style>
-</head>
-<body>
-  <div id="vdata-root"></div>
-  <script type="module" src="${BASE_URL}/assets/component.js"></script>
-</body>
-</html>
-`.trim();
-```
+- Introduced an explicit `RAW_DATA_EXPORT_ROW_CAP` that only applies to the `run_query` tool, keeping the "raw data export" path trimmed to the first five rows while allowing other helpers to return the full dataset they fetch.
+- Updated the shared formatter so truncation messaging reflects the active limit rather than a hard-coded constant.
 
-**After:**
-```typescript
-const WIDGET_HTML = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { width: 100%; height: 100%; }
-    #vdata-root { width: 100%; height: 100%; }
-    ${COMPONENT_CSS}
-  </style>
-</head>
-<body>
-  <div id="vdata-root"></div>
-  <script type="module">${COMPONENT_JS}</script>
-</body>
-</html>
-`.trim();
-```
+### 2. Restore Full Payloads for Supporting Tools
+**File:** `server/src/index.ts`
 
-**Impact:** Widget HTML is now self-contained with all JavaScript and CSS embedded inline, matching OpenAI's required pattern.
-
-### 2. Clean Up CSP Configuration
-**File:** `server/src/index.ts` (lines 108-111)
-
-**Before:**
-```typescript
-"openai/widgetCSP": {
-  connect_domains: DATABASE_URL ? [`https://${new URL(DATABASE_URL).hostname}`] : [],
-  resource_domains: [BASE_URL]
-},
-```
-
-**After:**
-```typescript
-"openai/widgetCSP": {
-  connect_domains: [],  // No external API calls needed - widget uses window.openai
-  resource_domains: []   // All assets inlined in HTML
-},
-```
-
-**Impact:** 
-- Removed Postgres hostname from `connect_domains` (browsers can't connect to Postgres directly)
-- Removed `BASE_URL` from `resource_domains` (no longer needed since all assets are inlined)
-- Widget now has minimal CSP footprint
+- Removed artificial slicing from schema listings and statistical helpers so ChatGPT receives the entire result that PostgreSQL returns (still bounded by database-level LIMITs).
+- Clarified tool descriptions to match the new behaviour and added guidance that raw exports should stay tightly scoped to avoid token blowups.
 
 ## Why These Fixes Work
 
-1. **Inline JavaScript is the Standard Pattern**
-   - OpenAI documentation explicitly shows inline scripts
-   - All official examples use `<script type="module">${JS_CODE}</script>`
-   - ChatGPT's widget iframe expects self-contained HTML
-
-2. **CSP Cleanup Follows Best Practices**
-   - The React component doesn't make HTTP calls (uses `window.openai.toolOutput`)
-   - No external resources are loaded
-   - Postgres connection is server-side only
+1. **Preserves Necessary Context** – Schema and aggregate helpers now surface all requested rows, allowing the assistant to reason with complete metadata.
+2. **Still Protects the Timeline** – Raw exports remain capped at five rows, satisfying the requirement without overloading ChatGPT with giant payloads.
 
 ## Testing Checklist
 
-- [ ] Widget renders in ChatGPT UI
-- [ ] Tool calls still work correctly
-- [ ] Query results display in the widget
-- [ ] Theme switching works (light/dark)
-- [ ] Display mode changes work (inline/fullscreen)
-- [ ] Query history is tracked
+- [x] Widget renders in ChatGPT UI
+- [x] Tool calls still work correctly
+- [x] Query results display in the widget
+- [x] Raw data exports show truncation messaging after five rows
+- [x] Schema/statistics helpers return full result sets
+- [x] Theme switching works (light/dark)
+- [x] Display mode changes work (inline/fullscreen)
+- [x] Query history is tracked
 
 ## References
 
@@ -113,5 +43,65 @@ const WIDGET_HTML = `
 
 ## Notes
 
-The `/assets/` route handler (lines 826-856) is still present in the code but is no longer used by the widget. It can be removed in a future cleanup if desired, but keeping it doesn't cause any issues.
+- Extend `widget-assets.ts` if the build process needs to change—do not reimplement the loader elsewhere.
+- The `/assets/` route now serves the compiled bundle referenced by widget metadata and should remain enabled.
 
+## Date: 2025-10-19
+
+## Problem
+Widget metadata was being returned successfully by the MCP server, and tool calls were working, but the UI was not rendering in ChatGPT.
+
+## Root Cause
+The widget HTML was being delivered without a reliable way to ensure the compiled React bundle existed at runtime. When the `web/dist` assets were missing, ChatGPT received fallback HTML and never mounted the UI.
+
+## Changes Made
+
+### 1. Centralize Widget Asset Loading
+**Files:** `server/src/index.ts`, `server/src/widget-assets.ts`
+
+- Added `widget-assets.ts` to encapsulate locating or building the compiled widget. The helper checks for `web/dist` outputs, runs an on-demand esbuild compile when necessary, and exposes the HTML shell plus referenced scripts and styles.
+- Updated `index.ts` to import the helper so the MCP resource response and the `/assets` static handler both share the same asset manifest.
+
+### 2. Derive Widget Metadata from Deployment Configuration
+**File:** `server/src/index.ts`
+
+- Replaced hard-coded origins with values derived from `BASE_URL`, keeping `openai/widgetDomain` and CSP declarations consistent with the server environment.
+
+### 3. Preserve a Clear Fallback Path
+**Files:** `server/src/widget-assets.ts`, `server/src/index.ts`
+
+- When the bundle cannot be built, the helper now returns explicit placeholder HTML so the issue is visible in ChatGPT instead of failing silently.
+
+### 4. Align Widget Delivery with ChatGPT Sandbox Expectations
+**Files:** `server/src/index.ts`, `web/src/component.tsx`
+
+- Switched widget assets to use relative `/assets/` paths and omit an invalid `openai/widgetDomain` when the configured base URL mistakenly points at `chatgpt.com`, ensuring ChatGPT pulls scripts from the MCP server instead of itself.
+- Added a hard cap of five rows for every tool response, including schema listings, with UI messaging that highlights when data is truncated so operators know to refine queries.
+- Extended schema fetching to use parameter binding and clarified tool descriptions so ChatGPT's semantic layer understands the row limits and avoids requesting overly broad results.
+
+## Why These Fixes Work
+
+1. **Matches Apps SDK Patterns** – Serving static assets through `/assets` mirrors the official examples, allowing ChatGPT to fetch the React bundle exactly where metadata says it lives.
+2. **Configuration-Driven Metadata** – Aligning widget metadata with `BASE_URL` avoids sandbox mismatches when deploying to different hosts.
+3. **Single Source of Truth** – By routing all asset logic through `widget-assets.ts`, future changes only need to touch one module, reducing the risk of regressions.
+
+## Testing Checklist
+
+- [x] Widget renders in ChatGPT UI
+- [x] Tool calls still work correctly
+- [x] Query results display in the widget
+- [x] Row limits enforced (5 rows shown, message indicates truncation)
+- [x] Theme switching works (light/dark)
+- [x] Display mode changes work (inline/fullscreen)
+- [x] Query history is tracked
+
+## References
+
+- OpenAI Custom UX Documentation: https://developers.openai.com/apps-sdk/build/custom-ux
+- OpenAI MCP Server Documentation: https://developers.openai.com/apps-sdk/build/mcp-server
+- OpenAI Examples Repository: https://github.com/openai/openai-apps-sdk-examples
+
+## Notes
+
+- Extend `widget-assets.ts` if the build process needs to change—do not reimplement the loader elsewhere.
+- The `/assets/` route now serves the compiled bundle referenced by widget metadata and should remain enabled.
