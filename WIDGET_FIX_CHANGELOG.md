@@ -1,5 +1,51 @@
 # Widget Rendering Fix - Changelog
 
+## Date: 2025-10-20
+
+## Problem
+The blanket 5-row cap added for every MCP tool response prevented schema lookups and summaries from returning complete data, while still failing to remind the assistant to keep raw exports concise.
+
+## Changes Made
+
+### 1. Scope the Row Cap to Raw Data Exports Only
+**File:** `server/src/index.ts`
+
+- Introduced an explicit `RAW_DATA_EXPORT_ROW_CAP` that only applies to the `run_query` tool, keeping the "raw data export" path trimmed to the first five rows while allowing other helpers to return the full dataset they fetch.
+- Updated the shared formatter so truncation messaging reflects the active limit rather than a hard-coded constant.
+
+### 2. Restore Full Payloads for Supporting Tools
+**File:** `server/src/index.ts`
+
+- Removed artificial slicing from schema listings and statistical helpers so ChatGPT receives the entire result that PostgreSQL returns (still bounded by database-level LIMITs).
+- Clarified tool descriptions to match the new behaviour and added guidance that raw exports should stay tightly scoped to avoid token blowups.
+
+## Why These Fixes Work
+
+1. **Preserves Necessary Context** – Schema and aggregate helpers now surface all requested rows, allowing the assistant to reason with complete metadata.
+2. **Still Protects the Timeline** – Raw exports remain capped at five rows, satisfying the requirement without overloading ChatGPT with giant payloads.
+
+## Testing Checklist
+
+- [x] Widget renders in ChatGPT UI
+- [x] Tool calls still work correctly
+- [x] Query results display in the widget
+- [x] Raw data exports show truncation messaging after five rows
+- [x] Schema/statistics helpers return full result sets
+- [x] Theme switching works (light/dark)
+- [x] Display mode changes work (inline/fullscreen)
+- [x] Query history is tracked
+
+## References
+
+- OpenAI Custom UX Documentation: https://developers.openai.com/apps-sdk/build/custom-ux
+- OpenAI MCP Server Documentation: https://developers.openai.com/apps-sdk/build/mcp-server
+- OpenAI Examples Repository: https://github.com/openai/openai-apps-sdk-examples
+
+## Notes
+
+- Extend `widget-assets.ts` if the build process needs to change—do not reimplement the loader elsewhere.
+- The `/assets/` route now serves the compiled bundle referenced by widget metadata and should remain enabled.
+
 ## Date: 2025-10-19
 
 ## Problem

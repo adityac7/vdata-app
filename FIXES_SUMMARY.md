@@ -183,8 +183,8 @@ Dashboard now:
 
 **Fix**:
 - Switched widget resource links to relative `/assets/` paths and only emit `openai/widgetDomain` when a valid deployment origin is configured
-- Added centralized row-limiting (5 rows) across all tools and updated descriptions/UI messaging so truncation is explicit
-- Parameterized schema queries to avoid placeholder bugs while preserving the row cap
+- Scoped the five-row cap to the raw data export tool while restoring full payloads for schema and analytics helpers; descriptions now warn ChatGPT to keep raw exports focused to avoid token bloat
+- Parameterized schema queries to avoid placeholder bugs while preserving the targeted cap
 
 **Result**: ChatGPT reliably loads the widget bundle from the MCP server and only receives lightweight result sets that respect the sandbox limits
 

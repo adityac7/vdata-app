@@ -129,7 +129,7 @@ const WIDGET_HTML = (COMPONENT_PLACEHOLDER
 </html>
 `.trim());
 
-const MAX_WIDGET_ROWS = 5;
+const RAW_DATA_EXPORT_ROW_CAP = 5;
 
 // Helper function to create widget metadata
 function widgetMeta(additionalMeta: Record<string, any> = {}) {
@@ -244,7 +244,7 @@ const tools: Tool[] = [
   },
   {
     name: "run_query",
-    description: "Execute a SELECT query on the PostgreSQL database (digital_insights table) and display results in the analytics dashboard. Automatically adds LIMIT if not specified and only shows the first 5 rows in ChatGPT. IMPORTANT: The table has these key columns: type, cat, genre, age_bucket, gender, nccs_class, state_grp, day_of_week, population, app_name, duration_sum (NOT 'duration'), event_id, user_id. Always use 'duration_sum' for duration-related queries.",
+    description: "Execute a SELECT query on the PostgreSQL database (digital_insights table) and display results in the analytics dashboard. Treat this as the raw data export path—the response only renders the first 5 rows in ChatGPT to keep replies lightweight. IMPORTANT: The table has these key columns: type, cat, genre, age_bucket, gender, nccs_class, state_grp, day_of_week, population, app_name, duration_sum (NOT 'duration'), event_id, user_id. Always use 'duration_sum' for duration-related queries and keep queries tightly scoped to avoid unnecessary tokens.",
     inputSchema: {
       type: "object",
       properties: {
@@ -297,7 +297,7 @@ const tools: Tool[] = [
   },
   {
     name: "get_sample_data",
-    description: "Get a sample of rows from the digital_insights table to preview the data structure and content (dashboard displays at most 5 rows).",
+    description: "Get a sample of rows from the digital_insights table to preview the data structure and content. The dashboard will display every row returned by this helper.",
     inputSchema: {
       type: "object",
       properties: {
@@ -321,7 +321,7 @@ const tools: Tool[] = [
   },
   {
     name: "get_database_statistics",
-    description: "Get statistics about the digital_insights table including total row count and platform distribution (type, count, avg duration, percentage). Only the first 5 summary rows are shown in ChatGPT.",
+    description: "Get statistics about the digital_insights table including total row count and platform distribution (type, count, avg duration, percentage).",
     inputSchema: {
       type: "object",
       properties: {},
@@ -340,7 +340,7 @@ const tools: Tool[] = [
   },
   {
     name: "get_column_value_counts",
-    description: "Get value distribution for a specific column in the digital_insights table. Shows count and percentage for each unique value (top 5 values displayed in ChatGPT).",
+    description: "Get value distribution for a specific column in the digital_insights table. Shows count and percentage for each unique value (up to the requested limit).",
     inputSchema: {
       type: "object",
       properties: {
@@ -370,16 +370,29 @@ const tools: Tool[] = [
 ];
 
 // Helper to format database.ts results for dashboard
-function formatDatabaseResult(dbResult: any, query?: string): any {
+type FormatResultOptions = {
+  displayLimit?: number;
+};
+
+function formatDatabaseResult(dbResult: any, query?: string, options: FormatResultOptions = {}): any {
+  const { displayLimit } = options;
+
   const limitRows = (rows?: any[]) => {
     if (!Array.isArray(rows)) {
       return { rows: [], truncated: false };
     }
 
-    const limited = rows.slice(0, MAX_WIDGET_ROWS);
+    if (typeof displayLimit === "number") {
+      const limited = rows.slice(0, displayLimit);
+      return {
+        rows: limited,
+        truncated: rows.length > limited.length,
+      };
+    }
+
     return {
-      rows: limited,
-      truncated: rows.length > limited.length,
+      rows,
+      truncated: false,
     };
   };
 
@@ -388,7 +401,8 @@ function formatDatabaseResult(dbResult: any, query?: string): any {
       return message;
     }
 
-    const note = `Showing first ${MAX_WIDGET_ROWS} of ${totalRows} rows.`;
+    const shownCount = typeof displayLimit === 'number' ? displayLimit : totalRows;
+    const note = `Showing first ${shownCount} of ${totalRows} rows.`;
     return message ? `${message.trim()} ${note}` : note;
   };
 
@@ -411,6 +425,9 @@ function formatDatabaseResult(dbResult: any, query?: string): any {
     const totalRows = typeof params.rowCount === 'number'
       ? params.rowCount
       : safeRows.length;
+    const effectiveDisplayLimit = typeof displayLimit === 'number'
+      ? displayLimit
+      : totalRows;
 
     return {
       query: params.queryLabel,
@@ -423,7 +440,7 @@ function formatDatabaseResult(dbResult: any, query?: string): any {
         ? appendTruncationMessage(params.message, truncated, totalRows)
         : params.message,
       truncated,
-      displayLimit: MAX_WIDGET_ROWS,
+      displayLimit: effectiveDisplayLimit,
     };
   };
 
@@ -539,7 +556,6 @@ async function initializeDashboard(message?: string): Promise<any> {
       results: [],
       columns: [],
       truncated: false,
-      displayLimit: MAX_WIDGET_ROWS,
     };
   }
 
@@ -554,7 +570,6 @@ async function initializeDashboard(message?: string): Promise<any> {
         results: [],
         columns: [],
         truncated: false,
-        displayLimit: MAX_WIDGET_ROWS,
       };
     } else {
       return {
@@ -564,7 +579,6 @@ async function initializeDashboard(message?: string): Promise<any> {
         results: [],
         columns: [],
         truncated: false,
-        displayLimit: MAX_WIDGET_ROWS,
       };
     }
   } catch (error: any) {
@@ -575,7 +589,6 @@ async function initializeDashboard(message?: string): Promise<any> {
       results: [],
       columns: [],
       truncated: false,
-      displayLimit: MAX_WIDGET_ROWS,
     };
   }
 }
@@ -605,21 +618,16 @@ async function getSchemaInfo(tableName?: string): Promise<any> {
       }
 
       const rows = result.rows ?? [];
-      const limitedRows = rows.slice(0, MAX_WIDGET_ROWS);
       const rowCount = typeof result.row_count === 'number' ? result.row_count : rows.length;
-      const truncated = rowCount > limitedRows.length;
 
       return {
         query: `DESCRIBE TABLE ${tableName}`,
-        results: limitedRows,
+        results: rows,
         columns: ['column_name', 'data_type', 'is_nullable', 'column_default'],
         rowCount,
         status: 'success',
-        message: truncated
-          ? `Schema for table '${tableName}': ${rowCount} columns. Showing first ${MAX_WIDGET_ROWS}.`
-          : `Schema for table '${tableName}': ${rowCount} columns`,
-        truncated,
-        displayLimit: MAX_WIDGET_ROWS,
+        message: `Schema for table '${tableName}': ${rowCount} columns`,
+        truncated: false,
       };
     } else {
       // List all tables
@@ -637,21 +645,16 @@ async function getSchemaInfo(tableName?: string): Promise<any> {
       }
 
       const rows = result.rows ?? [];
-      const limitedRows = rows.slice(0, MAX_WIDGET_ROWS);
       const rowCount = typeof result.row_count === 'number' ? result.row_count : rows.length;
-      const truncated = rowCount > limitedRows.length;
 
       return {
         query: 'SHOW TABLES',
-        results: limitedRows,
+        results: rows,
         columns: ['table_name', 'table_type'],
         rowCount,
         status: 'success',
-        message: truncated
-          ? `Found ${rowCount} tables in the database. Showing first ${MAX_WIDGET_ROWS}.`
-          : `Found ${rowCount} tables in the database`,
-        truncated,
-        displayLimit: MAX_WIDGET_ROWS,
+        message: `Found ${rowCount} tables in the database`,
+        truncated: false,
       };
     }
   } catch (error: any) {
@@ -663,7 +666,6 @@ async function getSchemaInfo(tableName?: string): Promise<any> {
       status: 'error',
       error: error.message,
       truncated: false,
-      displayLimit: MAX_WIDGET_ROWS,
     };
   }
 }
@@ -749,7 +751,9 @@ function createVdataServer(): Server {
           case "run_query": {
             const args = runQuerySchema.parse(request.params.arguments ?? {});
             const dbResult = await executeQuery(args.query, args.limit);
-            const result = formatDatabaseResult(dbResult, args.query);
+            const result = formatDatabaseResult(dbResult, args.query, {
+              displayLimit: RAW_DATA_EXPORT_ROW_CAP,
+            });
 
             return {
               content: [
