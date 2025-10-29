@@ -27,6 +27,7 @@ import {
   getColumnValueCounts,
   closePool
 } from "./database.js";
+import { loadWidgetAssets } from "./widget-assets.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -36,6 +37,13 @@ const PORT = parseInt(process.env.PORT || "8000", 10);
 const DATABASE_URL = process.env.DATABASE_URL;
 // Use Render's auto-provided RENDER_EXTERNAL_URL first, then BASE_URL, then localhost
 const BASE_URL = process.env.RENDER_EXTERNAL_URL || process.env.BASE_URL || `http://localhost:${PORT}`;
+const BASE_ORIGIN = (() => {
+  try {
+    return new URL(BASE_URL).origin;
+  } catch {
+    return BASE_URL;
+  }
+})();
 
 // Check if database is configured
 const isDatabaseConfigured = !!DATABASE_URL;
@@ -46,38 +54,27 @@ if (isDatabaseConfigured) {
   console.warn('⚠️  DATABASE_URL not set - database tools will not work');
 }
 
-// Load the built React component
-let COMPONENT_JS = "";
-let COMPONENT_CSS = "";
+// Load the built React component (building on-demand if needed)
+const {
+  js: COMPONENT_JS,
+  css: COMPONENT_CSS,
+  placeholder: COMPONENT_PLACEHOLDER,
+} = await loadWidgetAssets();
 
-try {
-  COMPONENT_JS = readFileSync(join(__dirname, "../../web/dist/component.js"), "utf8");
-  console.log("✅ Loaded component.js");
-} catch (error) {
-  console.warn("⚠️  Component JS not found, using placeholder");
-  COMPONENT_JS = `
-    console.log("Vdata App loaded!");
-    const root = document.getElementById("vdata-root");
-    if (root) {
-      root.innerHTML = '<div style="padding: 20px; font-family: system-ui;"><h1>🎉 Vdata Analytics</h1><p>UI component not built. Run: cd web && npm run build</p></div>';
-    }
-  `;
-}
-
-try {
-  COMPONENT_CSS = readFileSync(join(__dirname, "../../web/dist/component.css"), "utf8");
-  console.log("✅ Loaded component.css");
-} catch (error) {
-  console.warn("⚠️  Component CSS not found, using placeholder");
-  COMPONENT_CSS = `
-    body { margin: 0; padding: 0; }
-    #vdata-root { font-family: system-ui, -apple-system, sans-serif; }
-  `;
+if (COMPONENT_PLACEHOLDER) {
+  console.warn("⚠️  Using placeholder widget assets. The React UI will not render.");
+} else {
+  console.log("✅ Widget assets ready");
 }
 
 // Widget configuration
 const WIDGET_URI = "ui://vdata/analytics-dashboard.html";
-const WIDGET_HTML = `
+const assetBase = new URL("/assets/", BASE_URL).toString();
+const widgetStylesheetHref = new URL("component.css", assetBase).toString();
+const widgetScriptSrc = new URL("component.js", assetBase).toString();
+
+const WIDGET_HTML = (COMPONENT_PLACEHOLDER
+  ? `
 <!DOCTYPE html>
 <html>
 <head>
@@ -95,7 +92,26 @@ const WIDGET_HTML = `
   <script type="module">${COMPONENT_JS}</script>
 </body>
 </html>
-`.trim();
+`.trim()
+  : `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; }
+    #vdata-root { width: 100%; height: 100%; }
+  </style>
+  <link rel="stylesheet" href="${widgetStylesheetHref}">
+</head>
+<body>
+  <div id="vdata-root"></div>
+  <script type="module" src="${widgetScriptSrc}"></script>
+</body>
+</html>
+`.trim());
 
 // Helper function to create widget metadata
 function widgetMeta(additionalMeta: Record<string, any> = {}) {
@@ -104,10 +120,10 @@ function widgetMeta(additionalMeta: Record<string, any> = {}) {
     "openai/widgetAccessible": true,
     "openai/resultCanProduceWidget": true,
     "openai/widgetPrefersBorder": true,
-    "openai/widgetDomain": "https://chatgpt.com",
+    "openai/widgetDomain": BASE_ORIGIN,
     "openai/widgetCSP": {
       connect_domains: [],  // No external API calls needed - widget uses window.openai
-      resource_domains: []   // All assets inlined in HTML
+      resource_domains: [BASE_ORIGIN]
     },
     ...additionalMeta,
   };
