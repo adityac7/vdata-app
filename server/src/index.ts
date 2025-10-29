@@ -89,8 +89,9 @@ const widgetDomain = (() => {
   return BASE_ORIGIN;
 })();
 
-const WIDGET_HTML = (COMPONENT_PLACEHOLDER
-  ? `
+// Always inline the assets for maximum compatibility
+// This is the recommended approach per OpenAI Apps SDK documentation
+const WIDGET_HTML = `
 <!DOCTYPE html>
 <html>
 <head>
@@ -108,26 +109,7 @@ const WIDGET_HTML = (COMPONENT_PLACEHOLDER
   <script type="module">${COMPONENT_JS}</script>
 </body>
 </html>
-`.trim()
-  : `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { width: 100%; height: 100%; }
-    #vdata-root { width: 100%; height: 100%; }
-  </style>
-  <link rel="stylesheet" href="${widgetStylesheetHref}">
-</head>
-<body>
-  <div id="vdata-root"></div>
-  <script type="module" src="${widgetScriptSrc}"></script>
-</body>
-</html>
-`.trim());
+`.trim();
 
 const RAW_DATA_EXPORT_ROW_CAP = 5;
 
@@ -141,16 +123,17 @@ function widgetMeta(additionalMeta: Record<string, any> = {}) {
     "openai/resultCanProduceWidget": true,
     "openai/widgetPrefersBorder": true,
     "openai/widgetCSP": {
-      connect_domains: [], // No external API calls needed - widget uses window.openai
-      resource_domains: widgetDomain ? [widgetDomain] : [],
+      // No external connections needed - all assets are inlined
+      connect_domains: [],
+      // No external resources needed - all assets are inlined
+      resource_domains: [],
       ...(additionalCsp ?? {}),
     },
     ...restMeta,
   };
 
-  if (widgetDomain) {
-    meta["openai/widgetDomain"] = widgetDomain;
-  }
+  // Don't set widgetDomain since we're inlining all assets
+  // This avoids subdomain sandbox complexity
 
   return meta;
 }
