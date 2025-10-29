@@ -46,7 +46,7 @@ function validateQuery(query: string): { valid: boolean; error?: string } {
 }
 
 // Execute query with safety checks
-export async function executeQuery(query: string, limit?: number): Promise<{
+export async function executeQuery(query: string, limit?: number, params?: any[]): Promise<{
   success: boolean;
   rows?: any[];
   columns?: string[];
@@ -68,7 +68,7 @@ export async function executeQuery(query: string, limit?: number): Promise<{
   
   try {
     const client = getPool();
-    const result: PgQueryResult = await client.query(finalQuery);
+    const result: PgQueryResult = await client.query(finalQuery, params);
     
     const columns = result.fields.map(f => f.name);
     const rows = result.rows;

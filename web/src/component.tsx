@@ -14,6 +14,8 @@ interface QueryResult {
   error?: string;
   message?: string;
   executionTime?: number;
+  truncated?: boolean;
+  displayLimit?: number;
 }
 
 interface DashboardState {
@@ -55,6 +57,10 @@ function VdataAnalyticsDashboard() {
     error: '#f56565',
     warning: '#ed8936',
   };
+
+  const totalRows = typeof toolOutput?.rowCount === 'number'
+    ? toolOutput.rowCount
+    : toolOutput?.results?.length || 0;
 
   return (
     <div
@@ -217,18 +223,31 @@ function VdataAnalyticsDashboard() {
               borderBottom: `1px solid ${colors.border}`,
               display: 'flex',
               justifyContent: 'space-between',
-              alignItems: 'center',
+              alignItems: 'flex-start',
             }}
           >
-            <h3
-              style={{
-                margin: 0,
-                fontSize: '16px',
-                fontWeight: 600,
-              }}
-            >
-              Results
-            </h3>
+            <div>
+              <h3
+                style={{
+                  margin: 0,
+                  fontSize: '16px',
+                  fontWeight: 600,
+                }}
+              >
+                Results
+              </h3>
+              {toolOutput?.truncated && (
+                <div
+                  style={{
+                    marginTop: '6px',
+                    fontSize: '12px',
+                    color: colors.warning,
+                  }}
+                >
+                  Showing first {toolOutput.displayLimit ?? 5} rows (total {totalRows}).
+                </div>
+              )}
+            </div>
             <span
               style={{
                 fontSize: '12px',
@@ -238,7 +257,7 @@ function VdataAnalyticsDashboard() {
                 borderRadius: '12px',
               }}
             >
-              {toolOutput.rowCount || toolOutput.results.length} rows
+              {totalRows} rows
             </span>
           </div>
           <div style={{ overflow: 'auto', maxHeight: isFullscreen ? '600px' : '400px' }}>
