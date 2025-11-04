@@ -25,6 +25,7 @@ interface DashboardState {
 
 // Main Dashboard Component
 function VdataAnalyticsDashboard() {
+  const [isReady, setIsReady] = useState(false);
   const toolOutput = useWidgetProps<QueryResult>();
   const [state, setState] = useWidgetState<DashboardState>({
     queryHistory: [],
@@ -32,15 +33,59 @@ function VdataAnalyticsDashboard() {
   const displayMode = useOpenAiGlobal('displayMode');
   const theme = useOpenAiGlobal('theme');
 
+  // Initialize and verify window.openai is available
+  useEffect(() => {
+    console.log('[Vdata] Component mounted');
+    console.log('[Vdata] window.openai exists:', !!window.openai);
+
+    if (window.openai) {
+      console.log('[Vdata] OpenAI SDK available');
+      console.log('[Vdata] Theme:', window.openai.theme);
+      console.log('[Vdata] Display mode:', window.openai.displayMode);
+      console.log('[Vdata] Tool output:', window.openai.toolOutput);
+      setIsReady(true);
+    } else {
+      console.warn('[Vdata] window.openai not available yet - will retry');
+
+      // Retry after a short delay in case it's still loading
+      const timeout = setTimeout(() => {
+        if (window.openai) {
+          console.log('[Vdata] OpenAI SDK now available after retry');
+          setIsReady(true);
+        } else {
+          console.error('[Vdata] window.openai still not available - component may not work correctly');
+          // Still set ready to show error state
+          setIsReady(true);
+        }
+      }, 100);
+
+      return () => clearTimeout(timeout);
+    }
+  }, []);
+
   // Track query history
   useEffect(() => {
     if (toolOutput?.query && !state.queryHistory.includes(toolOutput.query)) {
+      console.log('[Vdata] New query received:', toolOutput.query);
       setState((prev) => ({
         ...prev,
         queryHistory: [...prev.queryHistory, toolOutput.query!].slice(-10), // Keep last 10
       }));
     }
   }, [toolOutput?.query]);
+
+  // Debug: Log whenever toolOutput changes
+  useEffect(() => {
+    if (toolOutput) {
+      console.log('[Vdata] Tool output updated:', {
+        status: toolOutput.status,
+        query: toolOutput.query,
+        rowCount: toolOutput.rowCount,
+        hasResults: !!toolOutput.results,
+        resultsLength: toolOutput.results?.length
+      });
+    }
+  }, [toolOutput]);
 
   const isDark = theme === 'dark';
   const isFullscreen = displayMode === 'fullscreen';
@@ -61,6 +106,44 @@ function VdataAnalyticsDashboard() {
   const totalRows = typeof toolOutput?.rowCount === 'number'
     ? toolOutput.rowCount
     : toolOutput?.results?.length || 0;
+
+  // Show loading state if not ready yet
+  if (!isReady) {
+    return (
+      <div style={{
+        padding: '24px',
+        fontFamily: 'system-ui, -apple-system, sans-serif',
+        textAlign: 'center'
+      }}>
+        <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏳</div>
+        <div>Loading Vdata Analytics...</div>
+      </div>
+    );
+  }
+
+  // Show error state if window.openai is not available
+  if (!window.openai) {
+    return (
+      <div style={{
+        padding: '24px',
+        fontFamily: 'system-ui, -apple-system, sans-serif',
+        background: '#fff5f5',
+        border: '1px solid #f56565',
+        borderRadius: '8px'
+      }}>
+        <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚠️</div>
+        <div style={{ fontWeight: 600, marginBottom: '8px', color: '#c53030' }}>
+          OpenAI SDK Not Available
+        </div>
+        <div style={{ fontSize: '14px', color: '#742a2a' }}>
+          The window.openai bridge is not available. This component needs to run in the ChatGPT environment.
+        </div>
+        <div style={{ fontSize: '12px', color: '#742a2a', marginTop: '12px', fontFamily: 'monospace' }}>
+          Debug: Check browser console for more information
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
