@@ -689,8 +689,8 @@ function createVdataServer(): Server {
           {
             uri: WIDGET_URI,
             mimeType: "text/html+skybridge",
-            text: WIDGET_HTML,
-            _meta: widgetMeta()
+            text: WIDGET_HTML
+            // Don't duplicate _meta here - it's already in the resource definition
           }
         ]
       };
@@ -724,6 +724,14 @@ function createVdataServer(): Server {
                 {
                   type: "text",
                   text: result.message
+                },
+                {
+                  type: "resource",
+                  resource: {
+                    uri: WIDGET_URI,
+                    mimeType: "text/html+skybridge",
+                    text: WIDGET_HTML
+                  }
                 }
               ],
               structuredContent: result,
@@ -743,6 +751,14 @@ function createVdataServer(): Server {
                 {
                   type: "text",
                   text: result.message || `Executed query: ${args.query}`
+                },
+                {
+                  type: "resource",
+                  resource: {
+                    uri: WIDGET_URI,
+                    mimeType: "text/html+skybridge",
+                    text: WIDGET_HTML
+                  }
                 }
               ],
               structuredContent: result,
@@ -759,6 +775,14 @@ function createVdataServer(): Server {
                 {
                   type: "text",
                   text: result.message || "Retrieved schema information"
+                },
+                {
+                  type: "resource",
+                  resource: {
+                    uri: WIDGET_URI,
+                    mimeType: "text/html+skybridge",
+                    text: WIDGET_HTML
+                  }
                 }
               ],
               structuredContent: result,
@@ -776,6 +800,14 @@ function createVdataServer(): Server {
                 {
                   type: "text",
                   text: result.message || "Retrieved sample data"
+                },
+                {
+                  type: "resource",
+                  resource: {
+                    uri: WIDGET_URI,
+                    mimeType: "text/html+skybridge",
+                    text: WIDGET_HTML
+                  }
                 }
               ],
               structuredContent: result,
@@ -792,6 +824,14 @@ function createVdataServer(): Server {
                 {
                   type: "text",
                   text: result.message || "Retrieved database statistics"
+                },
+                {
+                  type: "resource",
+                  resource: {
+                    uri: WIDGET_URI,
+                    mimeType: "text/html+skybridge",
+                    text: WIDGET_HTML
+                  }
                 }
               ],
               structuredContent: result,
@@ -809,6 +849,14 @@ function createVdataServer(): Server {
                 {
                   type: "text",
                   text: result.message || `Retrieved value counts for ${args.columnName}`
+                },
+                {
+                  type: "resource",
+                  resource: {
+                    uri: WIDGET_URI,
+                    mimeType: "text/html+skybridge",
+                    text: WIDGET_HTML
+                  }
                 }
               ],
               structuredContent: result,
