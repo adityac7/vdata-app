@@ -2,25 +2,38 @@ import { Pool, QueryResult as PgQueryResult } from 'pg';
 
 // Database configuration
 const DATABASE_URL = process.env.DATABASE_URL || '';
+const HUL_DATABASE_URL = process.env.HUL_DATABASE_URL || '';
 const MAX_ROWS = 1000;
 const ALLOWED_STATEMENTS = ['SELECT'];
 
-// Create connection pool
-let pool: Pool | null = null;
+// Database types
+export type DatabaseType = 'main' | 'hul';
 
-function getPool(): Pool {
-  if (!pool) {
+// Connection pool manager
+const pools: Map<DatabaseType, Pool> = new Map();
+
+function getPool(dbType: DatabaseType = 'main'): Pool {
+  if (!pools.has(dbType)) {
+    const dbUrl = dbType === 'hul' ? HUL_DATABASE_URL : DATABASE_URL;
+
+    if (!dbUrl) {
+      throw new Error(`Database URL not configured for: ${dbType}`);
+    }
+
     // Convert postgres:// to postgresql:// if needed
-    const dbUrl = DATABASE_URL.startsWith('postgres://') 
-      ? DATABASE_URL.replace('postgres://', 'postgresql://')
-      : DATABASE_URL;
-    
-    pool = new Pool({
-      connectionString: dbUrl,
-      ssl: dbUrl.includes('localhost') ? false : { rejectUnauthorized: false }
+    const normalizedUrl = dbUrl.startsWith('postgres://')
+      ? dbUrl.replace('postgres://', 'postgresql://')
+      : dbUrl;
+
+    const pool = new Pool({
+      connectionString: normalizedUrl,
+      ssl: normalizedUrl.includes('localhost') ? false : { rejectUnauthorized: false }
     });
+
+    pools.set(dbType, pool);
   }
-  return pool;
+
+  return pools.get(dbType)!;
 }
 
 // Query validation
@@ -46,38 +59,45 @@ function validateQuery(query: string): { valid: boolean; error?: string } {
 }
 
 // Execute query with safety checks
-export async function executeQuery(query: string, limit?: number, params?: any[]): Promise<{
+export async function executeQuery(
+  query: string,
+  limit?: number,
+  params?: any[],
+  dbType: DatabaseType = 'main'
+): Promise<{
   success: boolean;
   rows?: any[];
   columns?: string[];
   row_count?: number;
   error?: string;
+  database?: DatabaseType;
 }> {
   const validation = validateQuery(query);
   if (!validation.valid) {
     return { success: false, error: validation.error };
   }
-  
+
   const actualLimit = limit ? Math.min(limit, MAX_ROWS) : MAX_ROWS;
-  
+
   // Add LIMIT if not present
   let finalQuery = query.trim();
   if (!finalQuery.toUpperCase().includes('LIMIT')) {
     finalQuery = `${finalQuery.replace(/;$/, '')} LIMIT ${actualLimit}`;
   }
-  
+
   try {
-    const client = getPool();
+    const client = getPool(dbType);
     const result: PgQueryResult = await client.query(finalQuery, params);
-    
+
     const columns = result.fields.map(f => f.name);
     const rows = result.rows;
-    
+
     return {
       success: true,
       rows,
       columns,
-      row_count: rows.length
+      row_count: rows.length,
+      database: dbType
     };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -122,15 +142,16 @@ export async function getDatabaseSchema(): Promise<string> {
 }
 
 // Get sample data tool
-export async function getSampleData(limit: number = 10): Promise<string> {
+export async function getSampleData(limit: number = 10, tableName: string = 'digital_insights', dbType: DatabaseType = 'main'): Promise<string> {
   const actualLimit = Math.min(limit, 100);
-  const result = await executeQuery(`SELECT * FROM digital_insights LIMIT ${actualLimit}`);
-  
+  const result = await executeQuery(`SELECT * FROM ${tableName} LIMIT ${actualLimit}`, undefined, undefined, dbType);
+
   if (result.success) {
     return JSON.stringify({
       sample_size: result.row_count,
       columns: result.columns,
-      data: result.rows
+      data: result.rows,
+      database: result.database
     }, null, 2);
   } else {
     return `Error: ${result.error}`;
@@ -138,77 +159,83 @@ export async function getSampleData(limit: number = 10): Promise<string> {
 }
 
 // Get database statistics tool
-export async function getDatabaseStatistics(): Promise<string> {
+export async function getDatabaseStatistics(tableName: string = 'digital_insights', dbType: DatabaseType = 'main'): Promise<string> {
   // Get total count
-  const countResult = await executeQuery("SELECT COUNT(*) as total FROM digital_insights");
-  
-  // Get platform distribution
-  const platformQuery = `
-    SELECT 
-      type as platform,
-      COUNT(*) as count,
-      ROUND(AVG(duration_sum)::numeric, 2) as avg_duration_seconds,
-      ROUND((COUNT(*) * 100.0 / SUM(COUNT(*)) OVER ())::numeric, 2) as percentage
-    FROM digital_insights
-    GROUP BY type
-    ORDER BY count DESC
-  `;
-  const platformResult = await executeQuery(platformQuery);
-  
-  if (countResult.success && platformResult.success) {
-    return JSON.stringify({
-      total_rows: countResult.rows![0].total,
-      platforms: platformResult.rows
-    }, null, 2);
+  const countResult = await executeQuery(`SELECT COUNT(*) as total FROM ${tableName}`, undefined, undefined, dbType);
+
+  // Get platform distribution (only for digital_insights table)
+  if (tableName === 'digital_insights') {
+    const platformQuery = `
+      SELECT
+        type as platform,
+        COUNT(*) as count,
+        ROUND(AVG(duration_sum)::numeric, 2) as avg_duration_seconds,
+        ROUND((COUNT(*) * 100.0 / SUM(COUNT(*)) OVER ())::numeric, 2) as percentage
+      FROM digital_insights
+      GROUP BY type
+      ORDER BY count DESC
+    `;
+    const platformResult = await executeQuery(platformQuery, undefined, undefined, dbType);
+
+    if (countResult.success && platformResult.success) {
+      return JSON.stringify({
+        total_rows: countResult.rows![0].total,
+        platforms: platformResult.rows,
+        database: dbType
+      }, null, 2);
+    } else {
+      const error = countResult.error || platformResult.error;
+      return `Error: ${error}`;
+    }
   } else {
-    const error = countResult.error || platformResult.error;
-    return `Error: ${error}`;
+    // Generic statistics for other tables
+    if (countResult.success) {
+      return JSON.stringify({
+        total_rows: countResult.rows![0].total,
+        database: dbType,
+        table: tableName
+      }, null, 2);
+    } else {
+      return `Error: ${countResult.error}`;
+    }
   }
 }
 
 // Get column value counts tool
-export async function getColumnValueCounts(columnName: string, limit: number = 20): Promise<string> {
-  // Validate column name
-  const validColumns = [
-    'type', 'cat', 'genre', 'age_bucket', 'gender', 'nccs_class',
-    'state_grp', 'day_of_week', 'population', 'app_name'
-  ];
-  
-  if (!validColumns.includes(columnName)) {
-    return `Error: Invalid column name. Valid columns are: ${validColumns.join(', ')}`;
-  }
-  
+export async function getColumnValueCounts(columnName: string, limit: number = 20, tableName: string = 'digital_insights', dbType: DatabaseType = 'main'): Promise<string> {
   const actualLimit = Math.min(limit, 100);
   const query = `
-    SELECT 
+    SELECT
       ${columnName} as value,
       COUNT(*) as count,
       ROUND((COUNT(*) * 100.0 / SUM(COUNT(*)) OVER ())::numeric, 2) as percentage
-    FROM digital_insights
+    FROM ${tableName}
     WHERE ${columnName} IS NOT NULL
     GROUP BY ${columnName}
     ORDER BY count DESC
     LIMIT ${actualLimit}
   `;
-  
-  const result = await executeQuery(query);
-  
+
+  const result = await executeQuery(query, undefined, undefined, dbType);
+
   if (result.success) {
     return JSON.stringify({
       column: columnName,
       unique_values: result.row_count,
-      distribution: result.rows
+      distribution: result.rows,
+      database: dbType,
+      table: tableName
     }, null, 2);
   } else {
     return `Error: ${result.error}`;
   }
 }
 
-// Close pool on shutdown
+// Close all pools on shutdown
 export async function closePool(): Promise<void> {
-  if (pool) {
+  for (const [dbType, pool] of pools.entries()) {
     await pool.end();
-    pool = null;
   }
+  pools.clear();
 }
 
