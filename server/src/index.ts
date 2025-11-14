@@ -247,7 +247,7 @@ const tools: Tool[] = [
   },
   {
     name: "run_query",
-    description: "Execute SELECT query. DATABASES: 'main'=digital_insights (app usage/duration/demos - type,cat,genre,age_bucket,gender,nccs_class,state_grp,day_of_week,population,app_name,duration_sum,event_id,user_id) | 'hul'=ecom/qcom (ads,search,cart,PDP,category visits - user-level aggregates). CONTEXT: Indian smartphone panel, weight=4 per cell (~850 cells age×gender×nccs×town×state). NCCS merge: A/A1→A, B→B, C/D/E→C/D/E. Outlier: >2yr. Default: last month, trend=3mo. JTBD: FMCG marketers - SOV, spend time, competition, opportunities. OUTPUT: Weighted analysis, low verbosity, high value, statistically significant, markdown. Choose DB by query intent or use both.",
+    description: "Execute SELECT query. DATABASES: 'main'=digital_insights (app usage/duration/demos - type,cat,genre,age_bucket,gender,nccs_class,state_grp,day_of_week,population,app_name,duration_sum,event_id,user_id) | 'hul'=hul_combined_data (ecom: vtionid,app,brand,event_ad,event_search,event_product,event_cart,cat,parent_company,\"Seen Ad\",\"Searched Product\",\"Seen Product\",\"Added to Cart\",\"Category Interaction\",Month,Year,nccs_code,age,gender,State,Population,zone - 629K rows). ARRAY COLUMNS in hul (use string_to_array(col,',') & UNNEST): app,\"Seen Ad\",\"Searched Product\",\"Seen Product\",\"Added to Cart\",\"Category Interaction\". QUOTE columns with spaces. CONTEXT: Indian smartphone panel, weight=4 per cell (~850 cells age×gender×nccs×town×state). NCCS merge: A/A1→A, B→B, C/D/E→C/D/E. Outlier: >2yr. Default: last month, trend=3mo. JTBD: FMCG marketers - SOV, spend time, competition, opportunities. OUTPUT: Weighted analysis, low verbosity, high value, statistically significant, markdown. Choose DB by query intent or use both.",
     inputSchema: {
       type: "object",
       properties: {
@@ -281,7 +281,7 @@ const tools: Tool[] = [
   },
   {
     name: "get_schema",
-    description: "Get schema. tableName optional. 'main' DB has digital_insights table. 'hul' DB has ecom/qcom tables.",
+    description: "Get schema. tableName optional. 'main' DB has digital_insights table. 'hul' DB has hul_combined_data table (ecom data with array columns).",
     inputSchema: {
       type: "object",
       properties: {
@@ -370,7 +370,7 @@ const tools: Tool[] = [
       properties: {
         columnName: {
           type: "string",
-          description: "Column to analyze. main: type,cat,genre,age_bucket,gender,nccs_class,state_grp,day_of_week,population,app_name"
+          description: "Column to analyze. main: type,cat,genre,age_bucket,gender,nccs_class,state_grp,day_of_week,population,app_name. hul: brand,cat,parent_company,nccs_code,age,gender,State,Population,zone,Month,Year"
         },
         limit: {
           type: "number",
@@ -625,9 +625,7 @@ async function initializeDashboard(message?: string): Promise<any> {
 // Helper to get default table name for database
 function getDefaultTable(dbType?: DatabaseType): string {
   if (dbType === 'hul') {
-    // For HUL database, we'll need to discover tables dynamically
-    // For now, return a placeholder - the LLM will query the schema first
-    return 'hul_data'; // placeholder
+    return 'hul_combined_data';
   }
   return 'digital_insights';
 }
