@@ -14,4 +14,6 @@ services:
         value: https://vdata-app.onrender.com
       - key: DATABASE_URL
         sync: false  # Set this manually in Render dashboard to your PostgreSQL connection string
+      - key: HUL_DATABASE_URL
+        value: postgresql://hul_user:PBdR1l3Qzx960gRwObmaetvS9JKHMh1f@dpg-d4anuf6uk2gs739jnab0-a/hul
 

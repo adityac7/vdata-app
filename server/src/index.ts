@@ -25,7 +25,8 @@ import {
   getSampleData,
   getDatabaseStatistics,
   getColumnValueCounts,
-  closePool
+  closePool,
+  type DatabaseType
 } from "./database.js";
 import { loadWidgetAssets } from "./widget-assets.js";
 
@@ -35,6 +36,7 @@ const __dirname = dirname(__filename);
 // Get port and database URL from environment
 const PORT = parseInt(process.env.PORT || "8000", 10);
 const DATABASE_URL = process.env.DATABASE_URL;
+const HUL_DATABASE_URL = process.env.HUL_DATABASE_URL;
 // Use Render's auto-provided RENDER_EXTERNAL_URL first, then BASE_URL, then localhost
 const BASE_URL = process.env.RENDER_EXTERNAL_URL || process.env.BASE_URL || `http://localhost:${PORT}`;
 const BASE_ORIGIN = (() => {
@@ -45,13 +47,20 @@ const BASE_ORIGIN = (() => {
   }
 })();
 
-// Check if database is configured
+// Check if databases are configured
 const isDatabaseConfigured = !!DATABASE_URL;
+const isHulDatabaseConfigured = !!HUL_DATABASE_URL;
 
 if (isDatabaseConfigured) {
-  console.log('✅ DATABASE_URL configured');
+  console.log('✅ DATABASE_URL configured (main)');
 } else {
-  console.warn('⚠️  DATABASE_URL not set - database tools will not work');
+  console.warn('⚠️  DATABASE_URL not set - main database tools will not work');
+}
+
+if (isHulDatabaseConfigured) {
+  console.log('✅ HUL_DATABASE_URL configured (hul)');
+} else {
+  console.warn('⚠️  HUL_DATABASE_URL not set - hul database tools will not work');
 }
 
 // Load the built React component (building on-demand if needed)
@@ -149,14 +158,21 @@ const resources: Resource[] = [
   }
 ];
 
+// Database selection helper
+const databaseSchema = z.enum(['main', 'hul']).optional().describe(
+  "Database to query: 'main' (digital_insights - app usage, duration, demographics) or 'hul' (ecom/qcom - ads, search, cart, PDP, category). Choose based on query intent. Default: 'main'"
+);
+
 // Tool input schemas
 const runQuerySchema = z.object({
   query: z.string().describe("SQL SELECT query to execute"),
-  limit: z.number().optional().describe("Optional limit for results (default: 1000)")
+  limit: z.number().optional().describe("Optional limit for results (default: 1000)"),
+  database: databaseSchema
 });
 
 const getSchemaSchema = z.object({
-  tableName: z.string().optional().describe("Optional: specific table name. Leave empty to list all tables")
+  tableName: z.string().optional().describe("Optional: specific table name. Leave empty to list all tables"),
+  database: databaseSchema
 });
 
 const initializeDashboardSchema = z.object({
@@ -164,14 +180,18 @@ const initializeDashboardSchema = z.object({
 });
 
 const getSampleDataSchema = z.object({
-  limit: z.number().optional().describe("Number of sample rows to return (default: 10, max: 100)")
+  limit: z.number().optional().describe("Number of sample rows to return (default: 10, max: 100)"),
+  database: databaseSchema
 });
 
-const getDatabaseStatisticsSchema = z.object({});
+const getDatabaseStatisticsSchema = z.object({
+  database: databaseSchema
+});
 
 const getColumnValueCountsSchema = z.object({
   columnName: z.string().describe("Column name to analyze. Valid columns: type, cat, genre, age_bucket, gender, nccs_class, state_grp, day_of_week, population, app_name"),
-  limit: z.number().optional().describe("Number of top values to return (default: 20, max: 100)")
+  limit: z.number().optional().describe("Number of top values to return (default: 20, max: 100)"),
+  database: databaseSchema
 });
 
 // Define tools - following OpenAI Apps SDK pattern
@@ -227,17 +247,22 @@ const tools: Tool[] = [
   },
   {
     name: "run_query",
-    description: "Execute a SELECT query on the PostgreSQL database (digital_insights table) and display results in the analytics dashboard. Treat this as the raw data export path—the response only renders the first 5 rows in ChatGPT to keep replies lightweight. IMPORTANT: The table has these key columns: type, cat, genre, age_bucket, gender, nccs_class, state_grp, day_of_week, population, app_name, duration_sum (NOT 'duration'), event_id, user_id. Always use 'duration_sum' for duration-related queries and keep queries tightly scoped to avoid unnecessary tokens.",
+    description: "Execute SELECT query. DATABASES: 'main'=digital_insights (app usage/duration/demos - type,cat,genre,age_bucket,gender,nccs_class,state_grp,day_of_week,population,app_name,duration_sum,event_id,user_id) | 'hul'=ecom/qcom (ads,search,cart,PDP,category visits - user-level aggregates). CONTEXT: Indian smartphone panel, weight=4 per cell (~850 cells age×gender×nccs×town×state). NCCS merge: A/A1→A, B→B, C/D/E→C/D/E. Outlier: >2yr. Default: last month, trend=3mo. JTBD: FMCG marketers - SOV, spend time, competition, opportunities. OUTPUT: Weighted analysis, low verbosity, high value, statistically significant, markdown. Choose DB by query intent or use both.",
     inputSchema: {
       type: "object",
       properties: {
         query: {
           type: "string",
-          description: "SQL SELECT query to execute. Use 'duration_sum' for duration, not 'duration'."
+          description: "SQL SELECT query. Use 'duration_sum' for duration in main DB."
         },
         limit: {
           type: "number",
-          description: "Optional limit for results (default: 1000)"
+          description: "Row limit (default: 1000)"
+        },
+        database: {
+          type: "string",
+          enum: ["main", "hul"],
+          description: "DB: 'main' (app usage) or 'hul' (ecom). Choose by intent. Default: 'main'"
         }
       },
       required: ["query"],
@@ -256,13 +281,18 @@ const tools: Tool[] = [
   },
   {
     name: "get_schema",
-    description: "Get database schema information. If tableName is provided, returns column details for that table (showing up to 5 entries). Otherwise, lists all tables in the database (first 5 only).",
+    description: "Get schema. tableName optional. 'main' DB has digital_insights table. 'hul' DB has ecom/qcom tables.",
     inputSchema: {
       type: "object",
       properties: {
         tableName: {
           type: "string",
-          description: "Optional: specific table name (e.g., 'digital_insights'). Leave empty to list all tables"
+          description: "Table name. Leave empty to list all"
+        },
+        database: {
+          type: "string",
+          enum: ["main", "hul"],
+          description: "DB: 'main' or 'hul'. Default: 'main'"
         }
       },
       additionalProperties: false
@@ -280,13 +310,18 @@ const tools: Tool[] = [
   },
   {
     name: "get_sample_data",
-    description: "Get a sample of rows from the digital_insights table to preview the data structure and content. The dashboard will display every row returned by this helper.",
+    description: "Sample rows from selected DB. Preview data structure/content.",
     inputSchema: {
       type: "object",
       properties: {
         limit: {
           type: "number",
-          description: "Number of sample rows (default: 10, max: 100)"
+          description: "Sample rows (default: 10, max: 100)"
+        },
+        database: {
+          type: "string",
+          enum: ["main", "hul"],
+          description: "DB: 'main' or 'hul'. Default: 'main'"
         }
       },
       additionalProperties: false
@@ -304,10 +339,16 @@ const tools: Tool[] = [
   },
   {
     name: "get_database_statistics",
-    description: "Get statistics about the digital_insights table including total row count and platform distribution (type, count, avg duration, percentage).",
+    description: "DB stats: row count, distribution. 'main'=platform dist (type/count/avg duration/%). 'hul'=ecom metrics.",
     inputSchema: {
       type: "object",
-      properties: {},
+      properties: {
+        database: {
+          type: "string",
+          enum: ["main", "hul"],
+          description: "DB: 'main' or 'hul'. Default: 'main'"
+        }
+      },
       additionalProperties: false
     },
     title: "Get Database Statistics",
@@ -323,17 +364,22 @@ const tools: Tool[] = [
   },
   {
     name: "get_column_value_counts",
-    description: "Get value distribution for a specific column in the digital_insights table. Shows count and percentage for each unique value (up to the requested limit).",
+    description: "Column value distribution. Count + % for unique values.",
     inputSchema: {
       type: "object",
       properties: {
         columnName: {
           type: "string",
-          description: "Column name to analyze. Valid: type, cat, genre, age_bucket, gender, nccs_class, state_grp, day_of_week, population, app_name"
+          description: "Column to analyze. main: type,cat,genre,age_bucket,gender,nccs_class,state_grp,day_of_week,population,app_name"
         },
         limit: {
           type: "number",
-          description: "Number of top values to return (default: 20, max: 100)"
+          description: "Top values (default: 20, max: 100)"
+        },
+        database: {
+          type: "string",
+          enum: ["main", "hul"],
+          description: "DB: 'main' or 'hul'. Default: 'main'"
         }
       },
       required: ["columnName"],
@@ -576,8 +622,18 @@ async function initializeDashboard(message?: string): Promise<any> {
   }
 }
 
+// Helper to get default table name for database
+function getDefaultTable(dbType?: DatabaseType): string {
+  if (dbType === 'hul') {
+    // For HUL database, we'll need to discover tables dynamically
+    // For now, return a placeholder - the LLM will query the schema first
+    return 'hul_data'; // placeholder
+  }
+  return 'digital_insights';
+}
+
 // Get schema helper (generic - works for all tables)
-async function getSchemaInfo(tableName?: string): Promise<any> {
+async function getSchemaInfo(tableName?: string, dbType?: DatabaseType): Promise<any> {
   if (!isDatabaseConfigured) {
     throw new Error("Database connection not configured. Set DATABASE_URL environment variable.");
   }
@@ -594,7 +650,7 @@ async function getSchemaInfo(tableName?: string): Promise<any> {
         FROM information_schema.columns
         WHERE table_name = $1
         ORDER BY ordinal_position
-      `, undefined, [tableName]);
+      `, undefined, [tableName], dbType);
 
       if (!result.success) {
         throw new Error(result.error || 'Failed to fetch schema');
@@ -621,7 +677,7 @@ async function getSchemaInfo(tableName?: string): Promise<any> {
         FROM information_schema.tables
         WHERE table_schema = 'public'
         ORDER BY table_name
-      `);
+      `, undefined, undefined, dbType);
 
       if (!result.success) {
         throw new Error(result.error || 'Failed to list tables');
@@ -741,7 +797,7 @@ function createVdataServer(): Server {
 
           case "run_query": {
             const args = runQuerySchema.parse(request.params.arguments ?? {});
-            const dbResult = await executeQuery(args.query, args.limit);
+            const dbResult = await executeQuery(args.query, args.limit, undefined, args.database as DatabaseType);
             const result = formatDatabaseResult(dbResult, args.query, {
               displayLimit: RAW_DATA_EXPORT_ROW_CAP,
             });
@@ -768,7 +824,7 @@ function createVdataServer(): Server {
 
           case "get_schema": {
             const args = getSchemaSchema.parse(request.params.arguments ?? {});
-            const result = await getSchemaInfo(args.tableName);
+            const result = await getSchemaInfo(args.tableName, args.database as DatabaseType);
 
             return {
               content: [
@@ -792,8 +848,10 @@ function createVdataServer(): Server {
 
           case "get_sample_data": {
             const args = getSampleDataSchema.parse(request.params.arguments ?? {});
-            const dbResult = await getSampleData(args.limit);
-            const result = formatDatabaseResult(dbResult, `SELECT * FROM digital_insights LIMIT ${args.limit || 10}`);
+            const dbType = args.database as DatabaseType;
+            const tableName = getDefaultTable(dbType);
+            const dbResult = await getSampleData(args.limit, tableName, dbType);
+            const result = formatDatabaseResult(dbResult, `SELECT * FROM ${tableName} LIMIT ${args.limit || 10}`);
 
             return {
               content: [
@@ -816,7 +874,10 @@ function createVdataServer(): Server {
           }
 
           case "get_database_statistics": {
-            const dbResult = await getDatabaseStatistics();
+            const args = getDatabaseStatisticsSchema.parse(request.params.arguments ?? {});
+            const dbType = args.database as DatabaseType;
+            const tableName = getDefaultTable(dbType);
+            const dbResult = await getDatabaseStatistics(tableName, dbType);
             const result = formatDatabaseResult(dbResult, "Database Statistics");
 
             return {
@@ -841,7 +902,9 @@ function createVdataServer(): Server {
 
           case "get_column_value_counts": {
             const args = getColumnValueCountsSchema.parse(request.params.arguments ?? {});
-            const dbResult = await getColumnValueCounts(args.columnName, args.limit);
+            const dbType = args.database as DatabaseType;
+            const tableName = getDefaultTable(dbType);
+            const dbResult = await getColumnValueCounts(args.columnName, args.limit, tableName, dbType);
             const result = formatDatabaseResult(dbResult, `Column distribution for ${args.columnName}`);
 
             return {
