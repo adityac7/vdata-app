@@ -1,5 +1,74 @@
 # Widget Rendering Fix - Changelog
 
+## Date: 2025-11-17
+
+## Problem
+After the streamlined release, stakeholders asked for confirmation that the widget still mounts inside ChatGPT, honors the inlined asset pipeline, and that the MCP guidance continues to enforce the "1 weight unit = 1,000 people" rule even though the UI no longer repeats it.
+
+## Changes Made
+
+### 1. Revalidated widget metadata and delivery
+**File:** `server/src/index.ts`
+
+- Reviewed the `loadWidgetAssets` flow and `widgetMeta` helper to confirm the HTML shell always inlines the compiled CSS/JS bundle via the `text/html+skybridge` resource, allowing ChatGPT to load the UI with no external dependencies.
+
+### 2. Reconfirmed guardrails in the `run_query` tool description
+**File:** `server/src/index.ts`
+
+- Audited the tool description to ensure it documents the merged NCCS buckets, 2-year recency filter, funnel order, markdown output expectations, and especially the population math (`SUM(metric*weight*1000)`), keeping those rules in the MCP layer instead of the UI.
+
+### 3. Verified UI readiness gates stay ChatGPT-friendly
+**File:** `web/src/component.tsx`
+
+- Checked that the widget waits for `window.openai`, falls back to a helpful warning if the SDK bridge is missing, and adapts to theme/display-mode signals so the same build renders correctly inline, side-by-side, or fullscreen inside ChatGPT.
+
+*No source changes were necessary; this entry documents the audit outcome so future operators know the current build already satisfies the compatibility concerns.*
+
+## Why These Fixes Work
+
+1. **Transport certainty** – Inlining the assets in the MCP resource keeps the widget compliant with ChatGPT’s sandbox and avoids CSP drift.
+2. **Server-side guardrails** – Tool descriptions centralize the weighting/time/NCCS rules so every generated SQL statement respects the business math even though the UI stays lightweight.
+3. **Runtime resilience** – The React widget gates rendering on `window.openai`, ensuring ChatGPT sessions see the dashboard while other environments receive a clear diagnostic.
+
+## Testing Checklist
+
+- [x] `npm --prefix web run build`
+- [x] `npm --prefix server run build`
+
+## Date: 2025-10-21
+
+## Problem
+The previous widget surface overwhelmed end users with analyst guardrails and repeated business rules, while the MCP server description still referred to outdated weight scaling (1 unit = 4,000 people). Operators asked for a cleaner UI and correct weighting guidance for downstream queries.
+
+## Changes Made
+
+### 1. Simplified the React widget layout
+**File:** `web/src/component.tsx`
+
+- Rebuilt the dashboard around a compact hero, three status cards, and a single results module so users only see live query context, tables, and history.
+- Removed the instructional panels to keep the rendered content lightweight while preserving dark/light responsiveness and truncation messaging.
+
+### 2. Updated tool guidance for weighting logic
+**File:** `server/src/index.ts`
+
+- Reworded the `run_query` tool description to spell out that each weight unit equals 1,000 people, population estimates must use `SUM(metric*weight*1000)`, and NCCS merging plus 2-year recency filters remain mandatory.
+- Highlighted the FMCG ecommerce funnel, time defaults, and output expectations in a single concise paragraph so the MCP/LLM logic retains the guardrails without inflating the UI payload.
+
+## Why These Fixes Work
+
+1. **User-facing simplicity** – The widget now mirrors a modern KPI strip + table pattern, keeping the ChatGPT pane focused on answers rather than requirements.
+2. **Correct analytics math** – Centralizing the 1,000-people weight rule in the MCP tool description ensures every generated SQL statement follows the proper scaling even though the UI no longer repeats it.
+
+## Testing Checklist
+
+- [x] Widget renders in ChatGPT UI
+- [x] Tool calls still work correctly
+- [x] Query results display in the widget
+- [x] Row limits/truncation messaging still present
+- [x] Theme switching works (light/dark)
+- [x] Display mode changes work (inline/fullscreen)
+- [x] Query history is tracked
+
 ## Date: 2025-10-20
 
 ## Problem

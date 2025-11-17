@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["<stdin>"],
+  "sourcesContent": ["\n      * { box-sizing: border-box; }\n      body { margin: 0; padding: 0; }\n      #vdata-root { width: 100%; height: 100%; }\n    "],
+  "mappings": "AACM,EAAI,WAAY,UAAY,CAC5B,KAFN,OAEqB,EAFrB,QAEiC,CAAG,CAC9B,CAAC,WAAa,MAAO,KAAM,OAAQ,IAAM",
+  "names": []
+}

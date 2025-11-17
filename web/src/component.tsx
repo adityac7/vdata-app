@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { useWidgetProps } from './use-widget-props';
 import { useWidgetState } from './use-widget-state';
 import { useOpenAiGlobal } from './use-openai-global';
 
-// Types for tool outputs
 interface QueryResult {
   query?: string;
   results?: any[];
@@ -20,126 +19,166 @@ interface QueryResult {
 
 interface DashboardState {
   queryHistory: string[];
-  selectedTable?: string;
 }
 
-// Main Dashboard Component
 function VdataAnalyticsDashboard() {
   const [isReady, setIsReady] = useState(false);
   const toolOutput = useWidgetProps<QueryResult>();
-  const [state, setState] = useWidgetState<DashboardState>({
-    queryHistory: [],
-  });
-  const displayMode = useOpenAiGlobal('displayMode');
+  const [state, setState] = useWidgetState<DashboardState>({ queryHistory: [] });
   const theme = useOpenAiGlobal('theme');
+  const displayMode = useOpenAiGlobal('displayMode');
 
-  // Initialize and verify window.openai is available
   useEffect(() => {
-    console.log('[Vdata] Component mounted');
-    console.log('[Vdata] window.openai exists:', !!window.openai);
-
     if (window.openai) {
-      console.log('[Vdata] OpenAI SDK available');
-      console.log('[Vdata] Theme:', window.openai.theme);
-      console.log('[Vdata] Display mode:', window.openai.displayMode);
-      console.log('[Vdata] Tool output:', window.openai.toolOutput);
       setIsReady(true);
-    } else {
-      console.warn('[Vdata] window.openai not available yet - will retry');
-
-      // Retry after a short delay in case it's still loading
-      const timeout = setTimeout(() => {
-        if (window.openai) {
-          console.log('[Vdata] OpenAI SDK now available after retry');
-          setIsReady(true);
-        } else {
-          console.error('[Vdata] window.openai still not available - component may not work correctly');
-          // Still set ready to show error state
-          setIsReady(true);
-        }
-      }, 100);
-
-      return () => clearTimeout(timeout);
+      return;
     }
+
+    const timeout = setTimeout(() => setIsReady(true), 120);
+    return () => clearTimeout(timeout);
   }, []);
 
-  // Track query history
   useEffect(() => {
     if (toolOutput?.query && !state.queryHistory.includes(toolOutput.query)) {
-      console.log('[Vdata] New query received:', toolOutput.query);
       setState((prev) => ({
         ...prev,
-        queryHistory: [...prev.queryHistory, toolOutput.query!].slice(-10), // Keep last 10
+        queryHistory: [...prev.queryHistory, toolOutput.query!].slice(-10),
       }));
     }
   }, [toolOutput?.query]);
 
-  // Debug: Log whenever toolOutput changes
   useEffect(() => {
     if (toolOutput) {
-      console.log('[Vdata] Tool output updated:', {
-        status: toolOutput.status,
-        query: toolOutput.query,
-        rowCount: toolOutput.rowCount,
-        hasResults: !!toolOutput.results,
-        resultsLength: toolOutput.results?.length
-      });
+      console.log('[Vdata] tool output updated', toolOutput);
     }
   }, [toolOutput]);
 
   const isDark = theme === 'dark';
   const isFullscreen = displayMode === 'fullscreen';
 
-  // Color scheme based on theme
   const colors = {
-    bg: isDark ? '#1a1a1a' : '#ffffff',
-    cardBg: isDark ? '#2d2d2d' : '#f7fafc',
-    text: isDark ? '#ffffff' : '#2d3748',
-    textMuted: isDark ? '#a0aec0' : '#718096',
-    border: isDark ? '#4a5568' : '#e2e8f0',
-    accent: '#667eea',
-    success: '#48bb78',
-    error: '#f56565',
-    warning: '#ed8936',
+    background: isDark ? '#030b16' : '#f5f7fb',
+    surface: isDark ? '#0f2034' : '#ffffff',
+    card: isDark ? '#132843' : '#ffffff',
+    border: isDark ? 'rgba(255,255,255,0.12)' : '#e2e8f0',
+    muted: isDark ? '#9fb2cc' : '#526079',
+    text: isDark ? '#f4f8ff' : '#0f172a',
   };
 
   const totalRows = typeof toolOutput?.rowCount === 'number'
     ? toolOutput.rowCount
     : toolOutput?.results?.length || 0;
 
-  // Show loading state if not ready yet
+  const statusLabel = (() => {
+    if (toolOutput?.status === 'running') return 'Running query';
+    if (toolOutput?.status === 'success') return 'Ready';
+    if (toolOutput?.status === 'error') return 'Needs attention';
+    return 'Idle';
+  })();
+
+  const statusIcon = (() => {
+    if (toolOutput?.status === 'running') return '⏳';
+    if (toolOutput?.status === 'success') return '✅';
+    if (toolOutput?.status === 'error') return '⚠️';
+    return '🟢';
+  })();
+
+  const highlightBanner = (() => {
+    if (toolOutput?.status === 'error') {
+      return {
+        tone: '#fef2f2',
+        border: '#fecaca',
+        text: toolOutput.error || 'Query failed. Inspect SQL and retry.',
+        icon: '⚠️',
+      };
+    }
+
+    if (toolOutput?.status === 'running') {
+      return {
+        tone: isDark ? 'rgba(255,255,255,0.04)' : '#edf2ff',
+        border: isDark ? 'rgba(255,255,255,0.12)' : '#c7d2fe',
+        text: 'Running query and waiting for results...',
+        icon: '⏳',
+      };
+    }
+
+    if (toolOutput?.message) {
+      return {
+        tone: isDark ? 'rgba(3, 218, 198, 0.08)' : '#e6fffb',
+        border: isDark ? 'rgba(3, 218, 198, 0.25)' : '#99f6e4',
+        text: toolOutput.message,
+        icon: '💡',
+      };
+    }
+
+    if (toolOutput?.query) {
+      return {
+        tone: isDark ? 'rgba(255,255,255,0.03)' : '#eef2ff',
+        border: isDark ? 'rgba(255,255,255,0.12)' : '#cdd4ff',
+        text: 'Query completed. Results are available below.',
+        icon: 'ℹ️',
+      };
+    }
+
+    return null;
+  })();
+
+  const cardData = [
+    {
+      label: 'Status',
+      value: `${statusIcon} ${statusLabel}`,
+      detail: toolOutput?.status === 'success'
+        ? 'Query finished'
+        : toolOutput?.status === 'running'
+        ? 'Working in the background'
+        : toolOutput?.status === 'error'
+        ? 'Check SQL and filters'
+        : 'Awaiting input',
+    },
+    {
+      label: 'Rows returned',
+      value: totalRows ? totalRows.toLocaleString() : '—',
+      detail: toolOutput?.truncated && toolOutput?.displayLimit
+        ? `showing first ${toolOutput.displayLimit}`
+        : 'matches current query',
+    },
+    {
+      label: 'Execution time',
+      value: toolOutput?.executionTime ? `${toolOutput.executionTime} ms` : '—',
+      detail: toolOutput?.executionTime ? 'last run duration' : 'run a query to measure',
+    },
+  ];
+
   if (!isReady) {
     return (
-      <div style={{
-        padding: '24px',
-        fontFamily: 'system-ui, -apple-system, sans-serif',
-        textAlign: 'center'
-      }}>
-        <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏳</div>
-        <div>Loading Vdata Analytics...</div>
+      <div
+        style={{
+          padding: '32px',
+          fontFamily: 'system-ui, -apple-system, sans-serif',
+          textAlign: 'center',
+          color: '#0f172a',
+        }}
+      >
+        <div style={{ fontSize: '42px', marginBottom: '12px' }}>⏳</div>
+        Loading VTION dashboard...
       </div>
     );
   }
 
-  // Show error state if window.openai is not available
   if (!window.openai) {
     return (
-      <div style={{
-        padding: '24px',
-        fontFamily: 'system-ui, -apple-system, sans-serif',
-        background: '#fff5f5',
-        border: '1px solid #f56565',
-        borderRadius: '8px'
-      }}>
-        <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚠️</div>
-        <div style={{ fontWeight: 600, marginBottom: '8px', color: '#c53030' }}>
-          OpenAI SDK Not Available
-        </div>
-        <div style={{ fontSize: '14px', color: '#742a2a' }}>
-          The window.openai bridge is not available. This component needs to run in the ChatGPT environment.
-        </div>
-        <div style={{ fontSize: '12px', color: '#742a2a', marginTop: '12px', fontFamily: 'monospace' }}>
-          Debug: Check browser console for more information
+      <div
+        style={{
+          padding: '24px',
+          fontFamily: 'system-ui, -apple-system, sans-serif',
+          background: '#fff5f5',
+          border: '1px solid #fecaca',
+          borderRadius: '12px',
+        }}
+      >
+        <div style={{ fontWeight: 600, marginBottom: '8px', color: '#b91c1c' }}>OpenAI SDK unavailable</div>
+        <div style={{ fontSize: '14px', color: '#7f1d1d' }}>
+          This dashboard must be opened from ChatGPT so the window.openai bridge is available.
         </div>
       </div>
     );
@@ -148,329 +187,260 @@ function VdataAnalyticsDashboard() {
   return (
     <div
       style={{
-        padding: isFullscreen ? '32px' : '24px',
-        fontFamily: 'system-ui, -apple-system, sans-serif',
-        maxWidth: isFullscreen ? '1200px' : '100%',
-        margin: '0 auto',
-        background: colors.bg,
+        fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
+        background: colors.background,
         color: colors.text,
         minHeight: isFullscreen ? '100vh' : 'auto',
+        padding: isFullscreen ? '32px 40px' : '20px',
       }}
     >
-      {/* Header */}
       <div
         style={{
-          background: `linear-gradient(135deg, #667eea 0%, #764ba2 100%)`,
+          background: isDark ? 'linear-gradient(120deg,#041027,#103056)' : 'linear-gradient(120deg,#052047,#0a3c67)',
+          borderRadius: '20px',
           padding: '24px',
-          borderRadius: '12px',
-          color: 'white',
-          marginBottom: '24px',
+          color: '#f5f8ff',
+          boxShadow: '0 20px 45px rgba(3,12,30,0.4)',
+          marginBottom: '20px',
         }}
       >
-        <h1 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: 600 }}>
-          📊 Vdata Analytics
-        </h1>
-        <p style={{ margin: 0, opacity: 0.9, fontSize: '14px' }}>
-          Your PostgreSQL data analytics companion
-        </p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '16px' }}>
+          <div style={{ flex: '1 1 260px' }}>
+            <div style={{ fontSize: '12px', letterSpacing: '0.2em', opacity: 0.8 }}>VTION INSIGHTS</div>
+            <h1 style={{ margin: '10px 0 6px', fontSize: '26px', fontWeight: 600 }}>FMCG ecommerce pulse</h1>
+            <p style={{ margin: 0, opacity: 0.9, lineHeight: 1.5, fontSize: '14px' }}>
+              Lightweight cockpit for monitoring live panel queries, execution status, and recent SQL runs.
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+            {['Panel coverage live', 'Auto-detect light/dark', 'Optimized for ChatGPT'].map((pill) => (
+              <span
+                key={pill}
+                style={{
+                  fontSize: '12px',
+                  padding: '6px 12px',
+                  borderRadius: '999px',
+                  border: '1px solid rgba(255,255,255,0.3)',
+                  background: 'rgba(0,0,0,0.18)',
+                }}
+              >
+                {pill}
+              </span>
+            ))}
+          </div>
+        </div>
       </div>
 
-      {/* Status Indicator */}
       <div
         style={{
-          background: colors.cardBg,
-          padding: '16px',
-          borderRadius: '8px',
-          border: `1px solid ${colors.border}`,
-          marginBottom: '24px',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          gap: '16px',
+          marginBottom: '20px',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        {cardData.map((card) => (
           <div
+            key={card.label}
             style={{
-              width: '10px',
-              height: '10px',
-              borderRadius: '50%',
-              background: toolOutput?.status === 'error' ? colors.error : colors.success,
-              animation: toolOutput?.status === 'running' ? 'pulse 2s infinite' : 'none',
+              background: colors.surface,
+              borderRadius: '16px',
+              border: `1px solid ${colors.border}`,
+              padding: '18px',
+              boxShadow: isDark ? '0 10px 30px rgba(0,0,0,0.35)' : '0 12px 28px rgba(15,23,42,0.08)',
             }}
-          />
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 500, fontSize: '14px' }}>
-              {toolOutput?.status === 'running' && '⏳ Running query...'}
-              {toolOutput?.status === 'success' && '✅ Query completed'}
-              {toolOutput?.status === 'error' && '❌ Query failed'}
-              {!toolOutput?.status && '🟢 Ready to query'}
+          >
+            <div style={{ fontSize: '12px', textTransform: 'uppercase', color: colors.muted, letterSpacing: '0.08em' }}>
+              {card.label}
+            </div>
+            <div style={{ fontSize: '24px', fontWeight: 600, margin: '6px 0 4px' }}>{card.value}</div>
+            <div style={{ fontSize: '13px', color: colors.muted }}>{card.detail}</div>
+          </div>
+        ))}
+      </div>
+
+      {highlightBanner && (
+        <div
+          style={{
+            borderRadius: '14px',
+            border: `1px solid ${highlightBanner.border}`,
+            background: highlightBanner.tone,
+            padding: '14px 16px',
+            marginBottom: '20px',
+            color: isDark ? '#f5f5f5' : '#0f172a',
+            display: 'flex',
+            gap: '10px',
+            alignItems: 'center',
+          }}
+        >
+          <span>{highlightBanner.icon}</span>
+          <span style={{ fontSize: '14px' }}>{highlightBanner.text}</span>
+        </div>
+      )}
+
+      <div
+        style={{
+          background: colors.surface,
+          borderRadius: '18px',
+          border: `1px solid ${colors.border}`,
+          padding: '20px',
+          marginBottom: '20px',
+          boxShadow: isDark ? '0 14px 30px rgba(0,0,0,0.35)' : '0 18px 40px rgba(15,23,42,0.08)',
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+            <div>
+              <div style={{ fontSize: '13px', textTransform: 'uppercase', color: colors.muted, letterSpacing: '0.1em' }}>
+                Current query
+              </div>
+              <div
+                style={{
+                  fontFamily: 'SFMono-Regular, Menlo, Consolas, monospace',
+                  fontSize: '13px',
+                  marginTop: '6px',
+                  color: colors.text,
+                }}
+              >
+                {toolOutput?.query ? toolOutput.query : 'No query has been executed yet.'}
+              </div>
             </div>
             {toolOutput?.executionTime && (
-              <div style={{ fontSize: '12px', color: colors.textMuted, marginTop: '4px' }}>
-                Execution time: {toolOutput.executionTime}ms
+              <div style={{ fontSize: '13px', color: colors.muted }}>runtime: {toolOutput.executionTime} ms</div>
+            )}
+          </div>
+
+          {toolOutput?.status === 'error' && (
+            <div style={{ color: '#b91c1c', fontSize: '13px' }}>{toolOutput.error}</div>
+          )}
+
+          <div
+            style={{
+              borderRadius: '12px',
+              border: `1px dashed ${colors.border}`,
+              padding: '16px',
+              background: isDark ? 'rgba(4,7,15,0.55)' : '#f8fafc',
+            }}
+          >
+            {toolOutput?.columns && toolOutput?.results && toolOutput.results.length > 0 ? (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
+                  <thead>
+                    <tr>
+                      {toolOutput.columns.map((col) => (
+                        <th
+                          key={col}
+                          style={{
+                            textAlign: 'left',
+                            padding: '10px 14px',
+                            fontSize: '12px',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.08em',
+                            color: colors.muted,
+                            borderBottom: `1px solid ${colors.border}`,
+                            background: isDark ? 'rgba(255,255,255,0.02)' : '#fff',
+                            position: 'sticky',
+                            top: 0,
+                          }}
+                        >
+                          {col}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {toolOutput.results.map((row, rowIdx) => (
+                      <tr
+                        key={rowIdx}
+                        style={{
+                          borderBottom: `1px solid ${colors.border}`,
+                          background: rowIdx % 2 === 0 ? 'transparent' : isDark ? 'rgba(255,255,255,0.02)' : '#fff',
+                        }}
+                      >
+                        {toolOutput.columns?.map((col, colIdx) => (
+                          <td
+                            key={`${rowIdx}-${colIdx}`}
+                            style={{
+                              padding: '10px 14px',
+                              fontSize: '14px',
+                              color: colors.text,
+                              borderRight:
+                                colIdx === (toolOutput.columns?.length ?? 0) - 1
+                                  ? 'none'
+                                  : `1px solid ${isDark ? 'rgba(255,255,255,0.03)' : 'rgba(15,23,42,0.04)'}`,
+                              whiteSpace: 'nowrap',
+                              textOverflow: 'ellipsis',
+                              overflow: 'hidden',
+                              maxWidth: '280px',
+                            }}
+                          >
+                            {row[col] === null || row[col] === undefined
+                              ? <span style={{ color: colors.muted }}>null</span>
+                              : typeof row[col] === 'object'
+                              ? JSON.stringify(row[col])
+                              : String(row[col])}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {toolOutput?.truncated && toolOutput?.displayLimit && (
+                  <div style={{ marginTop: '10px', fontSize: '12px', color: colors.muted }}>
+                    Showing first {toolOutput.displayLimit} rows.
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ fontSize: '14px', color: colors.muted }}>
+                Results will appear here after a successful query.
               </div>
             )}
           </div>
         </div>
       </div>
 
-      {/* Current Query */}
-      {toolOutput?.query && (
-        <div
-          style={{
-            background: colors.cardBg,
-            padding: '16px',
-            borderRadius: '8px',
-            border: `1px solid ${colors.border}`,
-            marginBottom: '24px',
-          }}
-        >
-          <h3
-            style={{
-              margin: '0 0 12px 0',
-              fontSize: '14px',
-              fontWeight: 600,
-              color: colors.textMuted,
-              textTransform: 'uppercase',
-              letterSpacing: '0.5px',
-            }}
-          >
-            Current Query
-          </h3>
-          <pre
-            style={{
-              margin: 0,
-              padding: '12px',
-              background: isDark ? '#1a1a1a' : '#fff',
-              borderRadius: '6px',
-              fontSize: '13px',
-              fontFamily: 'Monaco, Consolas, monospace',
-              overflow: 'auto',
-              border: `1px solid ${colors.border}`,
-            }}
-          >
-            {toolOutput.query}
-          </pre>
-        </div>
-      )}
-
-      {/* Error Display */}
-      {toolOutput?.error && (
-        <div
-          style={{
-            background: isDark ? '#3d2020' : '#fff5f5',
-            padding: '16px',
-            borderRadius: '8px',
-            border: `1px solid ${colors.error}`,
-            marginBottom: '24px',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'start', gap: '12px' }}>
-            <span style={{ fontSize: '20px' }}>❌</span>
-            <div>
-              <div style={{ fontWeight: 600, marginBottom: '4px', color: colors.error }}>
-                Error
-              </div>
-              <div style={{ fontSize: '14px', color: colors.text }}>{toolOutput.error}</div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Message Display */}
-      {toolOutput?.message && !toolOutput?.error && (
-        <div
-          style={{
-            background: colors.cardBg,
-            padding: '16px',
-            borderRadius: '8px',
-            border: `1px solid ${colors.border}`,
-            marginBottom: '24px',
-          }}
-        >
-          <div style={{ fontSize: '14px', color: colors.text }}>{toolOutput.message}</div>
-        </div>
-      )}
-
-      {/* Results Table */}
-      {toolOutput?.results && toolOutput.results.length > 0 && (
-        <div
-          style={{
-            background: colors.cardBg,
-            borderRadius: '8px',
-            border: `1px solid ${colors.border}`,
-            overflow: 'hidden',
-            marginBottom: '24px',
-          }}
-        >
-          <div
-            style={{
-              padding: '16px',
-              borderBottom: `1px solid ${colors.border}`,
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'flex-start',
-            }}
-          >
-            <div>
-              <h3
-                style={{
-                  margin: 0,
-                  fontSize: '16px',
-                  fontWeight: 600,
-                }}
-              >
-                Results
-              </h3>
-              {toolOutput?.truncated && (
-                <div
-                  style={{
-                    marginTop: '6px',
-                    fontSize: '12px',
-                    color: colors.warning,
-                  }}
-                >
-                  Showing first {toolOutput.displayLimit ?? 5} rows (total {totalRows}).
-                </div>
-              )}
-            </div>
-            <span
-              style={{
-                fontSize: '12px',
-                color: colors.textMuted,
-                background: isDark ? '#1a1a1a' : '#fff',
-                padding: '4px 12px',
-                borderRadius: '12px',
-              }}
-            >
-              {totalRows} rows
-            </span>
-          </div>
-          <div style={{ overflow: 'auto', maxHeight: isFullscreen ? '600px' : '400px' }}>
-            <table
-              style={{
-                width: '100%',
-                borderCollapse: 'collapse',
-                fontSize: '13px',
-              }}
-            >
-              <thead>
-                <tr
-                  style={{
-                    background: isDark ? '#1a1a1a' : '#edf2f7',
-                    position: 'sticky',
-                    top: 0,
-                  }}
-                >
-                  {toolOutput.columns?.map((col, idx) => (
-                    <th
-                      key={idx}
-                      style={{
-                        textAlign: 'left',
-                        padding: '12px 16px',
-                        fontWeight: 600,
-                        borderBottom: `2px solid ${colors.border}`,
-                      }}
-                    >
-                      {col}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {toolOutput.results.map((row, rowIdx) => (
-                  <tr
-                    key={rowIdx}
-                    style={{
-                      borderBottom: `1px solid ${colors.border}`,
-                      background:
-                        rowIdx % 2 === 0
-                          ? 'transparent'
-                          : isDark
-                          ? 'rgba(255,255,255,0.02)'
-                          : 'rgba(0,0,0,0.02)',
-                    }}
-                  >
-                    {toolOutput.columns?.map((col, colIdx) => (
-                      <td
-                        key={colIdx}
-                        style={{
-                          padding: '12px 16px',
-                          maxWidth: '300px',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {row[col] === null || row[col] === undefined
-                          ? <span style={{ color: colors.textMuted, fontStyle: 'italic' }}>null</span>
-                          : typeof row[col] === 'object'
-                          ? JSON.stringify(row[col])
-                          : String(row[col])}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Query History */}
       {state.queryHistory.length > 0 && (
         <div
           style={{
-            background: colors.cardBg,
-            padding: '16px',
-            borderRadius: '8px',
+            background: colors.card,
+            borderRadius: '16px',
             border: `1px solid ${colors.border}`,
+            padding: '18px',
           }}
         >
-          <h3
-            style={{
-              margin: '0 0 12px 0',
-              fontSize: '14px',
-              fontWeight: 600,
-              color: colors.textMuted,
-              textTransform: 'uppercase',
-              letterSpacing: '0.5px',
-            }}
-          >
-            Recent Queries
-          </h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {state.queryHistory.slice().reverse().map((query, idx) => (
-              <div
-                key={idx}
-                style={{
-                  padding: '8px 12px',
-                  background: isDark ? '#1a1a1a' : '#fff',
-                  borderRadius: '6px',
-                  fontSize: '12px',
-                  fontFamily: 'Monaco, Consolas, monospace',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  border: `1px solid ${colors.border}`,
-                }}
-              >
-                {query}
-              </div>
-            ))}
+          <div style={{ fontSize: '12px', letterSpacing: '0.08em', color: colors.muted, textTransform: 'uppercase' }}>
+            Recent queries
+          </div>
+          <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {state.queryHistory
+              .slice()
+              .reverse()
+              .map((query, idx) => (
+                <div
+                  key={`${query}-${idx}`}
+                  style={{
+                    fontFamily: 'SFMono-Regular, Menlo, Consolas, monospace',
+                    fontSize: '12px',
+                    padding: '10px 12px',
+                    borderRadius: '10px',
+                    background: isDark ? 'rgba(3,4,7,0.6)' : '#f1f5f9',
+                    border: `1px solid ${colors.border}`,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {query}
+                </div>
+              ))}
           </div>
         </div>
       )}
-
-      {/* Pulse animation */}
-      <style>{`
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.5; }
-        }
-      `}</style>
     </div>
   );
 }
 
-// Mount the component
 const root = document.getElementById('vdata-root');
 if (root) {
   createRoot(root).render(<VdataAnalyticsDashboard />);
