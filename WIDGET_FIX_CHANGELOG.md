@@ -1,5 +1,40 @@
 # Widget Rendering Fix - Changelog
 
+## Date: 2025-11-17
+
+## Problem
+After the streamlined release, stakeholders asked for confirmation that the widget still mounts inside ChatGPT, honors the inlined asset pipeline, and that the MCP guidance continues to enforce the "1 weight unit = 1,000 people" rule even though the UI no longer repeats it.
+
+## Changes Made
+
+### 1. Revalidated widget metadata and delivery
+**File:** `server/src/index.ts`
+
+- Reviewed the `loadWidgetAssets` flow and `widgetMeta` helper to confirm the HTML shell always inlines the compiled CSS/JS bundle via the `text/html+skybridge` resource, allowing ChatGPT to load the UI with no external dependencies.
+
+### 2. Reconfirmed guardrails in the `run_query` tool description
+**File:** `server/src/index.ts`
+
+- Audited the tool description to ensure it documents the merged NCCS buckets, 2-year recency filter, funnel order, markdown output expectations, and especially the population math (`SUM(metric*weight*1000)`), keeping those rules in the MCP layer instead of the UI.
+
+### 3. Verified UI readiness gates stay ChatGPT-friendly
+**File:** `web/src/component.tsx`
+
+- Checked that the widget waits for `window.openai`, falls back to a helpful warning if the SDK bridge is missing, and adapts to theme/display-mode signals so the same build renders correctly inline, side-by-side, or fullscreen inside ChatGPT.
+
+*No source changes were necessary; this entry documents the audit outcome so future operators know the current build already satisfies the compatibility concerns.*
+
+## Why These Fixes Work
+
+1. **Transport certainty** – Inlining the assets in the MCP resource keeps the widget compliant with ChatGPT’s sandbox and avoids CSP drift.
+2. **Server-side guardrails** – Tool descriptions centralize the weighting/time/NCCS rules so every generated SQL statement respects the business math even though the UI stays lightweight.
+3. **Runtime resilience** – The React widget gates rendering on `window.openai`, ensuring ChatGPT sessions see the dashboard while other environments receive a clear diagnostic.
+
+## Testing Checklist
+
+- [x] `npm --prefix web run build`
+- [x] `npm --prefix server run build`
+
 ## Date: 2025-10-21
 
 ## Problem
